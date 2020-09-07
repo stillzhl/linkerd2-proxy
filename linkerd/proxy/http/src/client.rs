@@ -1,13 +1,14 @@
 use crate::{glue::Body, h1, h2, Version};
-use futures::{future, prelude::*};
+use futures::prelude::*;
 use linkerd2_error::Error;
 use std::{
     marker::PhantomData,
+    pin::Pin,
     task::{Context, Poll},
 };
 use tower::ServiceExt;
 use tracing::{debug, debug_span, trace};
-use tracing_futures::{Instrument, Instrumented};
+//use tracing_futures::{Instrument, Instrumented};
 
 /// Configures an HTTP client that uses a `C`-typed connector
 #[derive(Debug)]
@@ -24,9 +25,9 @@ pub struct MakeClient<C, B> {
 }
 
 /// The `Service` yielded by `MakeClient::new_service()`.
-pub enum Client<C, T, B> {
-    Http1(h1::Client<C, T, B>),
-    Http2(h2::Connection<B>),
+pub struct Client<C, T, B> {
+    h1: h1::Client<C, T, B>,
+    h2: Option<h2::Connection<B>>,
 }
 
 // === impl MakeClientLayer ===
@@ -76,33 +77,33 @@ where
 {
     type Response = Client<C, T, B>;
     type Error = Error;
-    type Future = future::Either<
-        future::Ready<Result<Client<C, T, B>, Error>>,
-        future::MapOk<
-            tower::util::Oneshot<h2::Connect<C, B>, T>,
-            fn(h2::Connection<B>) -> Client<C, T, B>,
-        >,
-    >;
+    type Future = Pin<Box<dyn Future<Output = Result<Client<C, T, B>, Error>> + Send + 'static>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, target: T) -> Self::Future {
-        trace!("Building HTTP client");
         let connect = self.connect.clone();
         let h2_settings = self.h2_settings;
 
-        match *target.as_ref() {
-            Version::Http1 => {
-                future::Either::Left(future::ok(Client::Http1(h1::Client::new(connect, target))))
-            }
-            Version::H2 => future::Either::Right(
-                h2::Connect::new(connect, h2_settings)
-                    .oneshot(target)
-                    .map_ok(Client::Http2),
-            ),
-        }
+        trace!("Building HTTP client");
+        let h1 = h1::Client::new(connect.clone(), target.clone());
+
+        Box::pin(async move {
+            let h2 = match *target.as_ref() {
+                Version::Http1 => None,
+                Version::H2 => {
+                    trace!("Building H2 client");
+                    let h2 = h2::Connect::new(connect, h2_settings)
+                        .oneshot(target)
+                        .await?;
+                    Some(h2)
+                }
+            };
+
+            Ok(Client { h1, h2 })
+        })
     }
 }
 
@@ -130,26 +131,17 @@ where
     B::Error: Into<Error> + Send + Sync,
 {
     type Response = http::Response<Body>;
-    type Error = Error;
-    type Future = future::Either<
-        future::ErrInto<
-            Instrumented<<h1::Client<C, T, B> as tower::Service<http::Request<B>>>::Future>,
-            Error,
-        >,
-        future::MapOk<
-            future::ErrInto<
-                Instrumented<<h2::Connection<B> as tower::Service<http::Request<B>>>::Future>,
-                Error,
-            >,
-            fn(http::Response<hyper::Body>) -> hyper::Response<Body>,
-        >,
-    >;
+    type Error = hyper::Error;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<http::Response<Body>, hyper::Error>> + Send + 'static>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match *self {
-            Client::Http1(ref mut h1) => h1.poll_ready(cx).map_err(Into::into),
-            Client::Http2(ref mut h2) => h2.poll_ready(cx).map_err(Into::into),
-        }
+        let res = match self.h2.as_mut() {
+            Some(ref mut h2) => futures::ready!(h2.poll_ready(cx)),
+            None => Ok(()),
+        };
+
+        Poll::Ready(res)
     }
 
     fn call(&mut self, req: http::Request<B>) -> Self::Future {
@@ -162,21 +154,12 @@ where
         let _e = span.enter();
         debug!(headers = ?req.headers(), "client request");
 
-        match self {
-            Client::Http1(ref mut h1) => {
-                future::Either::Left(h1.call(req).instrument(span.clone()).err_into::<Error>())
+        if req.version() == ::http::Version::HTTP_2 {
+            if let Some(ref mut client) = self.h2.as_mut() {
+                return Box::pin(client.call(req).map_ok(|rsp| rsp.map(Body::from)));
             }
-            Client::Http2(ref mut h2) => future::Either::Right(
-                h2.call(req)
-                    .instrument(span.clone())
-                    .err_into::<Error>()
-                    .map_ok(|rsp| {
-                        rsp.map(|b| Body {
-                            body: Some(b),
-                            upgrade: None,
-                        })
-                    }),
-            ),
         }
+
+        self.h1.request(req) //.instrument(span)
     }
 }

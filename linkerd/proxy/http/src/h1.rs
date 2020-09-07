@@ -8,13 +8,11 @@ use http::{
     uri::{Authority, Parts, Scheme, Uri},
 };
 use linkerd2_error::Error;
-use std::{
-    future::Future,
-    mem,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{future::Future, mem, pin::Pin};
 use tracing::{debug, trace};
+
+#[derive(Debug)]
+pub struct UnsupportedHTTPVersion(http::Version);
 
 pub struct Client<C, T, B> {
     connect: C,
@@ -23,10 +21,7 @@ pub struct Client<C, T, B> {
     relative: Option<hyper::Client<HyperConnect<C, T>, B>>,
 }
 
-impl<C, T, B> Client<C, T, B>
-where
-    Self: tower::Service<http::Request<B>>,
-{
+impl<C, T, B> Client<C, T, B> {
     pub fn new(connect: C, target: T) -> Self {
         Self {
             connect,
@@ -48,7 +43,7 @@ impl<C: Clone, T: Clone, B> Clone for Client<C, T, B> {
     }
 }
 
-impl<C, T, B> tower::Service<http::Request<B>> for Client<C, T, B>
+impl<C, T, B> Client<C, T, B>
 where
     T: Clone + Send + Sync + 'static,
     C: tower::make::MakeConnection<T> + Clone + Send + Sync + 'static,
@@ -59,16 +54,11 @@ where
     B::Data: Send,
     B::Error: Into<Error> + Send + Sync,
 {
-    type Response = http::Response<Body>;
-    type Error = hyper::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
+    pub fn request(
+        &mut self,
+        mut req: http::Request<B>,
+    ) -> Pin<Box<dyn Future<Output = Result<http::Response<Body>, hyper::Error>> + Send + 'static>>
+    {
         let is_absolute = wants_upgrade(&req);
 
         let upgrade = req.extensions_mut().remove::<Http11Upgrade>();
@@ -106,16 +96,16 @@ where
             // clients lazily.
             let client = if is_absolute {
                 if self.absolute.is_none() {
-                    self.absolute = Some(hyper::Client::builder().set_host(true).build(
-                        HyperConnect::new(self.connect.clone(), self.target.clone(), true),
-                    ));
+                    let connect =
+                        HyperConnect::new(self.connect.clone(), self.target.clone(), true);
+                    self.absolute = Some(hyper::Client::builder().set_host(true).build(connect));
                 }
                 self.absolute.as_ref().unwrap()
             } else {
                 if self.relative.is_none() {
-                    self.relative = Some(hyper::Client::builder().set_host(false).build(
-                        HyperConnect::new(self.connect.clone(), self.target.clone(), false),
-                    ));
+                    let connect =
+                        HyperConnect::new(self.connect.clone(), self.target.clone(), false);
+                    self.relative = Some(hyper::Client::builder().set_host(false).build(connect));
                 }
                 self.relative.as_ref().unwrap()
             };
@@ -137,13 +127,12 @@ where
                 strip_connection_headers(rsp.headers_mut());
             }
 
-            rsp.map(|b| Body {
-                body: Some(b),
-                upgrade,
-            })
+            rsp.map(move |b| Body::new(b, upgrade))
         }))
     }
 }
+
+// === HTTP/1 utils ===
 
 /// Convert any URI into its origin-form (relative path part only).
 pub(crate) fn set_origin_form(uri: &mut Uri) {

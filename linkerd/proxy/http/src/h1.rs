@@ -1,8 +1,19 @@
-use super::upgrade::HttpConnect;
-use http;
-use http::header::{CONNECTION, HOST, UPGRADE};
-use http::uri::{Authority, Parts, Scheme, Uri};
-use std::mem;
+use crate::{
+    glue::{Body, HyperConnect},
+    upgrade::{Http11Upgrade, HttpConnect},
+};
+use futures::prelude::*;
+use http::{
+    header::{CONNECTION, HOST, UPGRADE},
+    uri::{Authority, Parts, Scheme, Uri},
+};
+use linkerd2_error::Error;
+use std::{
+    future::Future,
+    mem,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tracing::{debug, trace};
 
 /// Tries to make sure the `Uri` of the request is in a form needed by
@@ -180,4 +191,133 @@ pub fn is_bad_request<B>(req: &http::Request<B>) -> bool {
     }
 
     false
+}
+
+pub struct Client<C, T, B> {
+    connect: C,
+    target: T,
+    absolute: Option<hyper::Client<HyperConnect<C, T>, B>>,
+    relative: Option<hyper::Client<HyperConnect<C, T>, B>>,
+}
+
+impl<C, T, B> Client<C, T, B>
+where
+    Self: tower::Service<http::Request<B>>,
+{
+    pub fn new(connect: C, target: T) -> Self {
+        Self {
+            connect,
+            target,
+            absolute: None,
+            relative: None,
+        }
+    }
+}
+
+impl<C: Clone, T: Clone, B> Clone for Client<C, T, B> {
+    fn clone(&self) -> Self {
+        Self {
+            connect: self.connect.clone(),
+            target: self.target.clone(),
+            absolute: self.absolute.clone(),
+            relative: self.relative.clone(),
+        }
+    }
+}
+
+impl<C, T, B> tower::Service<http::Request<B>> for Client<C, T, B>
+where
+    T: Clone + Send + Sync + 'static,
+    C: tower::make::MakeConnection<T> + Clone + Send + Sync + 'static,
+    C::Connection: Unpin + Send + 'static,
+    C::Future: Unpin + Send + 'static,
+    C::Error: Into<Error>,
+    B: hyper::body::HttpBody + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Error> + Send + Sync,
+{
+    type Response = http::Response<Body>;
+    type Error = hyper::Error;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
+        let is_absolute = wants_upgrade(&req);
+
+        let upgrade = req.extensions_mut().remove::<Http11Upgrade>();
+        let is_http_connect = req.method() == &http::Method::CONNECT;
+
+        let is_missing_authority = req
+            .uri()
+            .authority()
+            .map(|_| false)
+            .or_else(|| {
+                req.headers()
+                    .get(HOST)
+                    .and_then(|h| h.to_str().ok())
+                    .map(|h| h.is_empty())
+            })
+            .unwrap_or(true);
+
+        let rsp_fut = if is_missing_authority {
+            // If there's no authority, we assume we're on some weird HTTP/1.0
+            // ish, so we just build a one-off client for the connection.
+            // There's no real reason to hold the client for re-use.
+            hyper::Client::builder()
+                .pool_max_idle_per_host(0)
+                .set_host(is_absolute)
+                .build(HyperConnect::new(
+                    self.connect.clone(),
+                    self.target.clone(),
+                    is_absolute,
+                ))
+                .request(req)
+        } else {
+            // Otherwise, use a cached client to take advantage of the
+            // connection pool. The client needs to be configured for absolute
+            // (HTTP proxy-style) URIs, so we cache separate absolute/relative
+            // clients lazily.
+            let client = if is_absolute {
+                if self.absolute.is_none() {
+                    self.absolute = Some(hyper::Client::builder().set_host(true).build(
+                        HyperConnect::new(self.connect.clone(), self.target.clone(), true),
+                    ));
+                }
+                self.absolute.as_ref().unwrap()
+            } else {
+                if self.relative.is_none() {
+                    self.relative = Some(hyper::Client::builder().set_host(false).build(
+                        HyperConnect::new(self.connect.clone(), self.target.clone(), false),
+                    ));
+                }
+                self.relative.as_ref().unwrap()
+            };
+            client.request(req)
+        };
+
+        Box::pin(rsp_fut.map_ok(move |mut rsp| {
+            if is_http_connect {
+                debug_assert!(
+                    upgrade.is_some(),
+                    "Upgrade extension must be set on CONNECT requests"
+                );
+                rsp.extensions_mut().insert(HttpConnect);
+            }
+
+            if is_upgrade(&rsp) {
+                trace!("client response is HTTP/1.1 upgrade");
+            } else {
+                strip_connection_headers(rsp.headers_mut());
+            }
+
+            rsp.map(|b| Body {
+                body: Some(b),
+                upgrade,
+            })
+        }))
+    }
 }

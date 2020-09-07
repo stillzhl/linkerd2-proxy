@@ -1,6 +1,6 @@
 use crate::proxy::http::{orig_proto, settings::Settings};
 use crate::svc::stack;
-use crate::{HttpEndpoint, Target};
+use crate::HttpEndpoint;
 use futures::{ready, TryFuture};
 use pin_project::pin_project;
 use std::future::Future;
@@ -41,65 +41,67 @@ impl<M> tower::layer::Layer<M> for OrigProtoUpgradeLayer {
 
 // === impl OrigProtoUpgrade ===
 
-impl<N> stack::NewService<Target<HttpEndpoint>> for OrigProtoUpgrade<N>
-where
-    N: stack::NewService<Target<HttpEndpoint>>,
-{
-    type Service = Either<orig_proto::Upgrade<N::Service>, N::Service>;
+// impl<N> stack::NewService<HttpEndpoint> for OrigProtoUpgrade<N>
+// where
+//     N: stack::NewService<HttpEndpoint>,
+// {
+//     type Service = Either<orig_proto::Upgrade<N::Service>, N::Service>;
 
-    fn new_service(&self, mut endpoint: Target<HttpEndpoint>) -> Self::Service {
-        if !endpoint.inner.can_use_orig_proto() {
-            trace!("Endpoint does not support transparent HTTP/2 upgrades");
-            return Either::B(self.inner.new_service(endpoint));
-        }
+//     fn new_service(&self, mut endpoint: HttpEndpoint) -> Self::Service {
+//         if !endpoint.can_use_orig_proto() {
+//             trace!("Endpoint does not support transparent HTTP/2 upgrades");
+//             return Either::B(self.inner.new_service(endpoint));
+//         }
 
-        let was_absolute = endpoint.inner.settings.was_absolute_form();
-        trace!(
-            header = %orig_proto::L5D_ORIG_PROTO,
-            was_absolute,
-            "Endpoint supports transparent HTTP/2 upgrades",
-        );
-        endpoint.inner.settings = Settings::Http2;
+//         // FIXME
+//         // let was_absolute = endpoint.settings.was_absolute_form();
+//         // trace!(
+//         //     header = %orig_proto::L5D_ORIG_PROTO,
+//         //     was_absolute,
+//         //     "Endpoint supports transparent HTTP/2 upgrades",
+//         // );
+//         // endpoint.settings = Settings::Http2;
 
-        let inner = self.inner.new_service(endpoint);
-        Either::A(orig_proto::Upgrade::new(inner, was_absolute))
-    }
-}
+//         let inner = self.inner.new_service(endpoint);
+//         Either::A(orig_proto::Upgrade::new(inner, was_absolute))
+//     }
+// }
 
-impl<M> tower::Service<Target<HttpEndpoint>> for OrigProtoUpgrade<M>
-where
-    M: tower::Service<Target<HttpEndpoint>>,
-{
-    type Response = Either<orig_proto::Upgrade<M::Response>, M::Response>;
-    type Error = M::Error;
-    type Future = UpgradeFuture<M::Future>;
+// impl<M> tower::Service<HttpEndpoint> for OrigProtoUpgrade<M>
+// where
+//     M: tower::Service<Target<HttpEndpoint>>,
+// {
+//     type Response = Either<orig_proto::Upgrade<M::Response>, M::Response>;
+//     type Error = M::Error;
+//     type Future = UpgradeFuture<M::Future>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
+//     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+//         self.inner.poll_ready(cx)
+//     }
 
-    fn call(&mut self, mut endpoint: Target<HttpEndpoint>) -> Self::Future {
-        let can_upgrade = endpoint.inner.can_use_orig_proto();
+//     fn call(&mut self, mut endpoint: Target<HttpEndpoint>) -> Self::Future {
+//         let can_upgrade = endpoint.can_use_orig_proto();
 
-        let was_absolute = endpoint.inner.settings.was_absolute_form();
+//         let was_absolute = endpoint.settings.was_absolute_form();
 
-        if can_upgrade {
-            trace!(
-                header = %orig_proto::L5D_ORIG_PROTO,
-                %was_absolute,
-                "Endpoint supports transparent HTTP/2 upgrades",
-            );
-            endpoint.inner.settings = Settings::Http2;
-        }
+//         //FIXME
+//         // if can_upgrade {
+//         //     trace!(
+//         //         header = %orig_proto::L5D_ORIG_PROTO,
+//         //         %was_absolute,
+//         //         "Endpoint supports transparent HTTP/2 upgrades",
+//         //     );
+//         //     endpoint.inner.settings = Settings::Http2;
+//         // }
 
-        let inner = self.inner.call(endpoint);
-        UpgradeFuture {
-            can_upgrade,
-            inner,
-            was_absolute,
-        }
-    }
-}
+//         let inner = self.inner.call(endpoint);
+//         UpgradeFuture {
+//             can_upgrade,
+//             inner,
+//             was_absolute,
+//         }
+//     }
+// }
 
 // === impl UpgradeFuture ===
 

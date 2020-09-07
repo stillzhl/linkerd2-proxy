@@ -7,8 +7,8 @@ use std::{
     task::{Context, Poll},
 };
 use tower::ServiceExt;
-use tracing::{debug, debug_span, trace};
-//use tracing_futures::{Instrument, Instrumented};
+use tracing::{debug, debug_span, info, trace};
+use tracing_futures::{Instrument, Instrumented};
 
 /// Configures an HTTP client that uses a `C`-typed connector
 #[derive(Debug)]
@@ -119,6 +119,9 @@ impl<C: Clone, B> Clone for MakeClient<C, B> {
 
 // === impl Client ===
 
+type RspFuture =
+    Pin<Box<dyn Future<Output = Result<http::Response<Body>, hyper::Error>> + Send + 'static>>;
+
 impl<C, T, B> tower::Service<http::Request<B>> for Client<C, T, B>
 where
     T: Clone + Send + Sync + 'static,
@@ -132,8 +135,7 @@ where
 {
     type Response = http::Response<Body>;
     type Error = hyper::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<http::Response<Body>, hyper::Error>> + Send + 'static>>;
+    type Future = Instrumented<RspFuture>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let res = match self.h2.as_mut() {
@@ -144,7 +146,7 @@ where
         Poll::Ready(res)
     }
 
-    fn call(&mut self, req: http::Request<B>) -> Self::Future {
+    fn call(&mut self, mut req: http::Request<B>) -> Self::Future {
         let span = debug_span!(
             "request",
             method = %req.method(),
@@ -154,12 +156,22 @@ where
         let _e = span.enter();
         debug!(headers = ?req.headers(), "client request");
 
-        if req.version() == ::http::Version::HTTP_2 {
+        if req.version() == http::Version::HTTP_2 {
             if let Some(ref mut client) = self.h2.as_mut() {
-                return Box::pin(client.call(req).map_ok(|rsp| rsp.map(Body::from)));
+                let fut: RspFuture = Box::pin(client.call(req).map_ok(|rsp| rsp.map(Body::from)));
+                return fut.instrument(span.clone());
+            }
+            debug!("H2 request to endpoint without an H2 client")
+        }
+
+        match req.version() {
+            http::Version::HTTP_09 | http::Version::HTTP_10 | http::Version::HTTP_11 => {}
+            _ => {
+                info!("Downgrading version to HTTP/1.1");
+                *req.version_mut() = http::Version::HTTP_11
             }
         }
 
-        self.h1.request(req) //.instrument(span)
+        self.h1.request(req).instrument(span.clone())
     }
 }

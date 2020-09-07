@@ -23,7 +23,7 @@ use tracing::debug;
 pub struct Body {
     /// In UpgradeBody::drop, if this was an HTTP upgrade, the body is taken
     /// to be inserted into the Http11Upgrade half.
-    pub(super) body: Option<hyper::Body>,
+    body: Option<hyper::Body>,
     pub(super) upgrade: Option<Http11Upgrade>,
 }
 

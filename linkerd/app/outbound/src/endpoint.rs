@@ -49,6 +49,7 @@ pub struct HttpEndpoint {
     pub identity: tls::PeerIdentity,
     pub metadata: Metadata,
     pub concrete: Concrete,
+    pub version: http::Version,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -121,7 +122,7 @@ impl std::hash::Hash for HttpEndpoint {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.addr.hash(state);
         self.identity.hash(state);
-        self.settings.hash(state);
+        self.version.hash(state);
         // Ignore metadata.
     }
 }
@@ -138,11 +139,11 @@ impl Into<SocketAddr> for HttpEndpoint {
     }
 }
 
-// impl AsRef<http::Settings> for HttpEndpoint {
-//     fn as_ref(&self) -> &http::Settings {
-//         &self.settings
-//     }
-// }
+impl AsRef<http::Version> for HttpEndpoint {
+    fn as_ref(&self) -> &http::Version {
+        &self.version
+    }
+}
 
 impl tap::Inspect for HttpEndpoint {
     fn src_addr<B>(&self, req: &http::Request<B>) -> Option<SocketAddr> {
@@ -200,6 +201,12 @@ impl MapEndpoint<Concrete, Metadata> for FromMetadata {
             identity,
             metadata,
             concrete: concrete.clone(),
+            // TOOD use dtect version from Concrete.
+            version: if metadata.protocol_hint() == ProtocolHint::Http2 {
+                http::Version::H2
+            } else {
+                http::Version::Http1
+            },
         }
     }
 }

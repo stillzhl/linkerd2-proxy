@@ -1,6 +1,6 @@
 use linkerd2_proxy_transport::io::{self, Peekable, PrefixedIo};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Version {
     Http1,
     H2,

@@ -53,14 +53,13 @@ impl<M> tower::layer::Layer<M> for OrigProtoUpgradeLayer {
 //             return Either::B(self.inner.new_service(endpoint));
 //         }
 
-//         // FIXME
-//         // let was_absolute = endpoint.settings.was_absolute_form();
-//         // trace!(
-//         //     header = %orig_proto::L5D_ORIG_PROTO,
-//         //     was_absolute,
-//         //     "Endpoint supports transparent HTTP/2 upgrades",
-//         // );
-//         // endpoint.settings = Settings::Http2;
+//         let was_absolute = endpoint.settings.was_absolute_form();
+//         trace!(
+//             header = %orig_proto::L5D_ORIG_PROTO,
+//             was_absolute,
+//             "Endpoint supports transparent HTTP/2 upgrades",
+//         );
+//         endpoint.settings = Settings::Http2;
 
 //         let inner = self.inner.new_service(endpoint);
 //         Either::A(orig_proto::Upgrade::new(inner, was_absolute))
@@ -69,7 +68,7 @@ impl<M> tower::layer::Layer<M> for OrigProtoUpgradeLayer {
 
 // impl<M> tower::Service<HttpEndpoint> for OrigProtoUpgrade<M>
 // where
-//     M: tower::Service<Target<HttpEndpoint>>,
+//     M: tower::Service<HttpEndpoint>,
 // {
 //     type Response = Either<orig_proto::Upgrade<M::Response>, M::Response>;
 //     type Error = M::Error;
@@ -79,20 +78,19 @@ impl<M> tower::layer::Layer<M> for OrigProtoUpgradeLayer {
 //         self.inner.poll_ready(cx)
 //     }
 
-//     fn call(&mut self, mut endpoint: Target<HttpEndpoint>) -> Self::Future {
+//     fn call(&mut self, mut endpoint: HttpEndpoint) -> Self::Future {
 //         let can_upgrade = endpoint.can_use_orig_proto();
 
 //         let was_absolute = endpoint.settings.was_absolute_form();
 
-//         //FIXME
-//         // if can_upgrade {
-//         //     trace!(
-//         //         header = %orig_proto::L5D_ORIG_PROTO,
-//         //         %was_absolute,
-//         //         "Endpoint supports transparent HTTP/2 upgrades",
-//         //     );
-//         //     endpoint.inner.settings = Settings::Http2;
-//         // }
+//         if can_upgrade {
+//             trace!(
+//                 header = %orig_proto::L5D_ORIG_PROTO,
+//                 %was_absolute,
+//                 "Endpoint supports transparent HTTP/2 upgrades",
+//             );
+//             endpoint.settings = Settings::Http2;
+//         }
 
 //         let inner = self.inner.call(endpoint);
 //         UpgradeFuture {
@@ -103,23 +101,23 @@ impl<M> tower::layer::Layer<M> for OrigProtoUpgradeLayer {
 //     }
 // }
 
-// === impl UpgradeFuture ===
+// // === impl UpgradeFuture ===
 
-impl<F> Future for UpgradeFuture<F>
-where
-    F: TryFuture,
-{
-    type Output = Result<Either<orig_proto::Upgrade<F::Ok>, F::Ok>, F::Error>;
+// impl<F> Future for UpgradeFuture<F>
+// where
+//     F: TryFuture,
+// {
+//     type Output = Result<Either<orig_proto::Upgrade<F::Ok>, F::Ok>, F::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let inner = ready!(this.inner.try_poll(cx))?;
+//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//         let this = self.project();
+//         let inner = ready!(this.inner.try_poll(cx))?;
 
-        if *this.can_upgrade {
-            let upgrade = orig_proto::Upgrade::new(inner, *this.was_absolute);
-            Poll::Ready(Ok(Either::A(upgrade)))
-        } else {
-            Poll::Ready(Ok(Either::B(inner)))
-        }
-    }
-}
+//         if *this.can_upgrade {
+//             let upgrade = orig_proto::Upgrade::new(inner, *this.was_absolute);
+//             Poll::Ready(Ok(Either::A(upgrade)))
+//         } else {
+//             Poll::Ready(Ok(Either::B(inner)))
+//         }
+//     }
+// }

@@ -195,7 +195,7 @@ impl Config {
         profiles_client: P,
         metrics: ProxyMetrics,
     ) -> impl tower::Service<
-        Logical,
+        HttpLogical,
         Error = Error,
         Future = impl Unpin + Send,
         Response = impl tower::Service<
@@ -224,14 +224,14 @@ impl Config {
             > + Send
             + 'static,
         S::Future: Send,
-        R: Resolve<Concrete, Endpoint = proxy::api_resolve::Metadata>
+        R: Resolve<HttpConcrete, Endpoint = proxy::api_resolve::Metadata>
             + Unpin
             + Clone
             + Send
             + 'static,
         R::Future: Unpin + Send,
         R::Resolution: Unpin + Send,
-        P: profiles::GetProfile<Logical> + Unpin + Clone + Send + 'static,
+        P: profiles::GetProfile<HttpLogical> + Unpin + Clone + Send + 'static,
         P::Future: Unpin + Send,
         P::Error: Send,
     {
@@ -263,7 +263,9 @@ impl Config {
                     .box_http_request(),
             )
             .push_spawn_ready()
+            .check_make_service::<HttpEndpoint, http::Request<_>>()
             .push(discover)
+            .check_service::<HttpConcrete>()
             .push_on_response(
                 svc::layers()
                     .push(http::balance::layer(EWMA_DEFAULT_RTT, EWMA_DECAY))
@@ -273,8 +275,8 @@ impl Config {
                     .push(metrics.stack.layer(stack_labels("concrete"))),
             )
             .into_new_service()
-            .instrument(|c: &Concrete| info_span!("concrete", dst = %c.dst))
-            .check_new_service::<Concrete, http::Request<_>>();
+            .instrument(|c: &HttpConcrete| info_span!("concrete", dst = %c.dst))
+            .check_new_service::<HttpConcrete, http::Request<_>>();
 
         // For each logical target, performs service profile resolution and
         // builds concrete services, over which requests are dispatched
@@ -288,7 +290,7 @@ impl Config {
         // processed.
         let logical = concrete
             // Uses the split-provided target `Addr` to build a concrete target.
-            .push_map_target(Concrete::from)
+            .push_map_target(HttpConcrete::from)
             .push(profiles::split::layer())
             // Drives concrete stacks to readiness and makes the split
             // cloneable, as required by the retry middleware.
@@ -322,26 +324,23 @@ impl Config {
                 ),
             )
             .spawn_buffer(buffer_capacity)
-            .check_make_service::<Logical<HttpEndpoint>, http::Request<_>>();
+            .check_make_service::<HttpLogical, http::Request<_>>();
 
         // Caches clients that bypass discovery/balancing.
         let forward = svc::stack(endpoint)
             .check_make_service::<HttpEndpoint, http::Request<http::boxed::Payload>>()
             .into_new_service()
             .cache(
-                svc::layers()
-                    .push_on_response(
-                        svc::layers()
-                            .push_failfast(dispatch_timeout)
-                            .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age)
-                            .box_http_request()
-                            .push(metrics.stack.layer(stack_labels("forward.endpoint"))),
-                    ),
+                svc::layers().push_on_response(
+                    svc::layers()
+                        .push_failfast(dispatch_timeout)
+                        .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age)
+                        .box_http_request()
+                        .push(metrics.stack.layer(stack_labels("forward.endpoint"))),
+                ),
             )
             .spawn_buffer(buffer_capacity)
-            .instrument(|e: &HttpEndpoint| {
-                info_span!("forward", peer.addr = %e.addr, peer.id = ?e.identity)
-            })
+            .instrument(|t: &HttpEndpoint| info_span!("forward", peer.addr = %t.addr, peer.id = ?t.identity))
             .check_make_service::<HttpEndpoint, http::Request<_>>();
 
         // Attempts to route route request to a logical services that uses
@@ -360,8 +359,8 @@ impl Config {
             .push(http::header_from_target::layer(CANONICAL_DST_HEADER))
             // Strips headers that may be set by this proxy.
             .push_on_response(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
-            .check_make_service_clone::<Logical, http::Request<B>>()
-            .instrument(|logical: &Logical| info_span!("logical", addr = %logical.dst))
+            .check_make_service_clone::<HttpLogical, http::Request<B>>()
+            .instrument(|logical: &HttpLogical| info_span!("logical", dst = %logical.dst))
             .into_inner()
     }
 
@@ -386,7 +385,11 @@ impl Config {
         C: tower::Service<TcpEndpoint, Error = Error> + Unpin + Clone + Send + Sync + 'static,
         C::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
         C::Future: Unpin + Send,
-        H: tower::Service<Logical, Error = Error, Response = S> + Unpin + Send + Clone + 'static,
+        H: tower::Service<HttpLogical, Error = Error, Response = S>
+            + Unpin
+            + Send
+            + Clone
+            + 'static,
         H::Future: Unpin + Send,
         S: tower::Service<
                 http::Request<http::boxed::Payload>,
@@ -425,7 +428,7 @@ impl Config {
             // Resolve the application-emitted destination via DNS to determine
             // its canonical FQDN to use for routing.
             .push(http::canonicalize::Layer::new(refine, canonicalize_timeout))
-            .check_make_service::<Logical, http::Request<_>>()
+            .check_make_service::<HttpLogical, http::Request<_>>()
             .push_make_ready()
             .push_timeout(dispatch_timeout)
             .push(router::Layer::new(LogicalPerRequest::from))

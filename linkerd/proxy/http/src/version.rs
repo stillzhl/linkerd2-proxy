@@ -1,7 +1,7 @@
 use linkerd2_proxy_transport::io::{self, Peekable, PrefixedIo};
 use tracing::{debug, trace};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Version {
     Http1,
     H2,
@@ -56,6 +56,14 @@ impl Version {
         let io = io.peek(8192).await?;
         let version = Version::from_prefix(io.prefix());
         Ok((version, io))
+    }
+
+    pub fn from_request<B>(req: &http::Request<B>) -> Self {
+        if req.version() == ::http::Version::HTTP_2 {
+            Self::H2
+        } else {
+            Self::Http1
+        }
     }
 }
 

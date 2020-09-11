@@ -23,7 +23,7 @@ use tracing::debug;
 pub struct Body {
     /// In UpgradeBody::drop, if this was an HTTP upgrade, the body is taken
     /// to be inserted into the Http11Upgrade half.
-    pub(super) body: Option<hyper::Body>,
+    body: Option<hyper::Body>,
     pub(super) upgrade: Option<Http11Upgrade>,
 }
 
@@ -100,10 +100,25 @@ impl HttpBody for Body {
 }
 
 impl Default for Body {
-    fn default() -> Body {
+    fn default() -> Self {
+        hyper::Body::empty().into()
+    }
+}
+
+impl From<hyper::Body> for Body {
+    fn from(body: hyper::Body) -> Self {
         Body {
-            body: Some(hyper::Body::empty()),
+            body: Some(body),
             upgrade: None,
+        }
+    }
+}
+
+impl Body {
+    pub(crate) fn new(body: hyper::Body, upgrade: Option<Http11Upgrade>) -> Self {
+        Body {
+            body: Some(body),
+            upgrade: upgrade,
         }
     }
 }

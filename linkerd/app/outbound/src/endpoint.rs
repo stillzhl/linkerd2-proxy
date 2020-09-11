@@ -182,9 +182,12 @@ impl Into<SocketAddr> for HttpEndpoint {
     }
 }
 
-impl AsRef<http::Settings> for HttpEndpoint {
-    fn as_ref(&self) -> &http::Settings {
-        &self.settings
+impl<'t> Into<http::Version> for &'t HttpEndpoint {
+    fn into(self) -> http::Version {
+        match self.settings {
+            http::Settings::Http1 { .. } => http::Version::Http1,
+            http::Settings::Http2 => http::Version::H2,
+        }
     }
 }
 

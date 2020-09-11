@@ -74,18 +74,6 @@ impl Addr {
         }
     }
 
-    pub fn to_http_authority(&self) -> http::uri::Authority {
-        match self {
-            Addr::Name(n) => n.as_http_authority(),
-            Addr::Socket(ref a) if a.port() == 80 => {
-                http::uri::Authority::from_str(&a.ip().to_string())
-                    .expect("SocketAddr must be valid authority")
-            }
-            Addr::Socket(a) => http::uri::Authority::from_str(&a.to_string())
-                .expect("SocketAddr must be valid authority"),
-        }
-    }
-
     pub fn socket_addr(&self) -> Option<SocketAddr> {
         match self {
             Addr::Socket(a) => Some(*a),
@@ -104,6 +92,20 @@ impl Addr {
         match self {
             Addr::Name(n) => Some(n),
             Addr::Socket(_) => None,
+        }
+    }
+}
+
+impl<'t> Into<http::uri::Authority> for &'t Addr {
+    fn into(self) -> http::uri::Authority {
+        match self {
+            Addr::Name(n) => n.as_http_authority(),
+            Addr::Socket(ref a) if a.port() == 80 => {
+                http::uri::Authority::from_str(&a.ip().to_string())
+                    .expect("SocketAddr must be valid authority")
+            }
+            Addr::Socket(a) => http::uri::Authority::from_str(&a.to_string())
+                .expect("SocketAddr must be valid authority"),
         }
     }
 }

@@ -531,8 +531,8 @@ impl std::fmt::Display for InvalidProfileAddr {
 
 impl std::error::Error for InvalidProfileAddr {}
 
-impl From<Addr> for InvalidProfileAddr {
-    fn from(addr: Addr) -> Self {
-        Self(addr)
+impl<T: Into<Addr>> From<T> for InvalidProfileAddr {
+    fn from(t: T) -> Self {
+        Self(t.into())
     }
 }

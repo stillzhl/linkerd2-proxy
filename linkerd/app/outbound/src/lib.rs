@@ -358,12 +358,13 @@ impl Config {
             .into_inner()
     }
 
-    pub async fn build_server<E, R, C, H, S>(
+    pub async fn build_server<E, P, R, C, H, S>(
         self,
         listen_addr: std::net::SocketAddr,
         listen: impl Stream<Item = std::io::Result<listen::Connection>> + Send + 'static,
         refine: R,
         resolve: E,
+        profiles_client: P,
         tcp_connect: C,
         http_router: H,
         metrics: ProxyMetrics,
@@ -374,6 +375,9 @@ impl Config {
         E: Resolve<Addr, Endpoint = proxy::api_resolve::Metadata> + Unpin + Clone + Send + 'static,
         E::Future: Unpin + Send,
         E::Resolution: Unpin + Send,
+        P: profiles::GetProfile<SocketAddr> + Unpin + Clone + Send + 'static,
+        P::Future: Unpin + Send,
+        P::Error: Send,
         R: tower::Service<dns::Name, Error = Error, Response = dns::Name>
             + Unpin
             + Clone
@@ -483,8 +487,7 @@ impl Config {
             .spawn_buffer(buffer_capacity)
             .check_make_service::<SocketAddr, ()>()
             .push(svc::layer::mk(tcp::Forward::new))
-            .instrument(|a: &SocketAddr| info_span!("tcp", dst = %a))
-            .push_map_target(|a: listen::Addrs| a.target_addr());
+            .instrument(|a: &SocketAddr| info_span!("tcp", dst = %a));
 
         let http = http::DetectHttp::new(
             h2_settings,
@@ -501,6 +504,10 @@ impl Config {
             .push_map_target(TcpEndpoint::from);
 
         let accept = svc::stack(SkipDetect::new(skip_detect, http, tcp_forward))
+            // Discovers the service profile from the control plane and passes
+            // it to inner stack to build the router and traffic split.
+            .push(profiles::discover::layer(profiles_client))
+            .push_map_target(|a: listen::Addrs| a.target_addr())
             .push(metrics.transport.layer_accept(TransportLabels));
 
         info!(addr = %listen_addr, "Serving");

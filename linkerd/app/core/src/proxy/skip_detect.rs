@@ -37,13 +37,14 @@ impl<S, D, F> SkipDetect<S, D, F> {
     }
 }
 
-impl<S, D, F> tower::Service<Addrs> for SkipDetect<S, D, F>
+impl<T, S, D, F> tower::Service<T> for SkipDetect<S, D, F>
 where
-    S: SkipTarget<Addrs>,
-    D: tower::Service<Addrs> + Clone + Send + 'static,
+    T: Send + 'static,
+    S: SkipTarget<T>,
+    D: tower::Service<T> + Clone + Send + 'static,
     D::Error: Into<Error>,
     D::Future: Send,
-    F: tower::Service<Addrs> + Clone + Send + 'static,
+    F: tower::Service<T> + Clone + Send + 'static,
     F::Error: Into<Error>,
     F::Future: Send,
 {
@@ -57,17 +58,17 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, addrs: Addrs) -> Self::Future {
-        if self.skip.skip_target(&addrs) {
+    fn call(&mut self, target: T) -> Self::Future {
+        if self.skip.skip_target(&target) {
             let tcp = self.tcp.clone();
             Box::pin(async move {
-                let f = tcp.oneshot(addrs).err_into::<Error>().await?;
+                let f = tcp.oneshot(target).err_into::<Error>().await?;
                 Ok(Accept::Tcp(f))
             })
         } else {
             let detect = self.detect.clone();
             Box::pin(async move {
-                let d = detect.oneshot(addrs).err_into::<Error>().await?;
+                let d = detect.oneshot(target).err_into::<Error>().await?;
                 Ok(Accept::Detect(d))
             })
         }

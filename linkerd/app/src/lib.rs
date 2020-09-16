@@ -157,6 +157,7 @@ impl Config {
                             .push_map_response(|(n, _)| n)
                             .into_inner(),
                         dst.resolve,
+                        dst.profiles.clone(),
                         outbound_connect,
                         outbound_http.clone(),
                         outbound_metrics,

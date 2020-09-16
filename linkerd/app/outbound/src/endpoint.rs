@@ -36,10 +36,16 @@ pub struct HttpConcrete {
 }
 
 #[derive(Clone, Debug)]
-pub struct LogicalPerRequest(listen::Addrs);
+pub struct LogicalPerRequest(SocketAddr);
 
 #[derive(Clone, Debug)]
 pub struct Profile {
+    pub rx: profiles::Receiver,
+    pub target_addr: SocketAddr,
+}
+
+#[derive(Clone, Debug)]
+pub struct HttpProfile {
     pub rx: profiles::Receiver,
     pub logical: HttpLogical,
 }
@@ -63,8 +69,8 @@ pub struct TcpEndpoint {
 
 // === impl HttpConrete ===
 
-impl From<(Addr, Profile)> for HttpConcrete {
-    fn from((dst, Profile { logical, .. }): (Addr, Profile)) -> Self {
+impl From<(Addr, HttpProfile)> for HttpConcrete {
+    fn from((dst, HttpProfile { logical, .. }): (Addr, HttpProfile)) -> Self {
         Self { dst, logical }
     }
 }
@@ -333,8 +339,8 @@ impl MapEndpoint<Addr, Metadata> for FromMetadata {
 
 // === impl LogicalPerRequest ===
 
-impl From<listen::Addrs> for LogicalPerRequest {
-    fn from(t: listen::Addrs) -> Self {
+impl From<SocketAddr> for LogicalPerRequest {
+    fn from(t: SocketAddr) -> Self {
         LogicalPerRequest(t)
     }
 }
@@ -365,7 +371,7 @@ impl<B> router::Recognize<http::Request<B>> for LogicalPerRequest {
                 })
             })
             .unwrap_or_else(|_| {
-                let addr = self.0.target_addr();
+                let addr = self.0;
                 tracing::debug!(%addr, "using socket target");
                 addr.into()
             });
@@ -376,7 +382,7 @@ impl<B> router::Recognize<http::Request<B>> for LogicalPerRequest {
 
         HttpLogical {
             dst,
-            orig_dst: self.0.target_addr(),
+            orig_dst: self.0,
             require_identity,
             version: req
                 .version()
@@ -386,7 +392,7 @@ impl<B> router::Recognize<http::Request<B>> for LogicalPerRequest {
     }
 }
 
-pub fn route((route, profile): (profiles::http::Route, Profile)) -> dst::Route {
+pub fn route((route, profile): (profiles::http::Route, HttpProfile)) -> dst::Route {
     dst::Route {
         route,
         target: profile.logical.dst,
@@ -396,26 +402,40 @@ pub fn route((route, profile): (profiles::http::Route, Profile)) -> dst::Route {
 
 // === impl Profile ===
 
-impl From<(profiles::Receiver, HttpLogical)> for Profile {
+impl From<(profiles::Receiver, SocketAddr)> for Profile {
+    fn from((rx, target_addr): (profiles::Receiver, SocketAddr)) -> Self {
+        Self { rx, target_addr }
+    }
+}
+
+impl Into<SocketAddr> for &'_ Profile {
+    fn into(self) -> SocketAddr {
+        self.target_addr
+    }
+}
+
+// === impl HttpProfile ===
+
+impl From<(profiles::Receiver, HttpLogical)> for HttpProfile {
     fn from((rx, logical): (profiles::Receiver, HttpLogical)) -> Self {
         Self { rx, logical }
     }
 }
 
-impl AsRef<Addr> for Profile {
+impl AsRef<Addr> for HttpProfile {
     fn as_ref(&self) -> &Addr {
         &self.logical.dst
     }
 }
 
-impl AsRef<profiles::Receiver> for Profile {
+impl AsRef<profiles::Receiver> for HttpProfile {
     fn as_ref(&self) -> &profiles::Receiver {
         &self.rx
     }
 }
 
-impl From<Profile> for HttpLogical {
-    fn from(Profile { logical, .. }: Profile) -> Self {
+impl From<HttpProfile> for HttpLogical {
+    fn from(HttpProfile { logical, .. }: HttpProfile) -> Self {
         logical
     }
 }

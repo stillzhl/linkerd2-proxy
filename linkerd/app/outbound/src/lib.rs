@@ -16,7 +16,6 @@ use linkerd2_app_core::{
     profiles,
     proxy::{
         self, core::resolve::Resolve, discover, http, identity, resolve::map_endpoint, tap, tcp,
-        SkipDetect,
     },
     reconnect, retry, router, serve,
     spans::SpanConverter,
@@ -304,7 +303,7 @@ impl Config {
                     .push_map_target(endpoint::route)
                     .into_inner(),
             ))
-            .push_map_target(endpoint::Profile::from)
+            .push_map_target(endpoint::HttpProfile::from)
             // Discovers the service profile from the control plane and passes
             // it to inner stack to build the router and traffic split.
             .push(profiles::discover::layer(profiles_client))
@@ -435,10 +434,13 @@ impl Config {
             .check_make_service::<HttpLogical, http::Request<_>>()
             .push_make_ready()
             .push_timeout(dispatch_timeout)
-            .push(router::Layer::new(LogicalPerRequest::from))
-            .check_new_service::<listen::Addrs, http::Request<_>>()
-            // Used by tap.
-            .push_http_insert_target()
+            .check_make_service::<HttpLogical, http::Request<_>>()
+            .push(router::Layer::new(|p: endpoint::Profile| {
+                LogicalPerRequest::from(p.target_addr)
+            }))
+            .check_new_service::<endpoint::Profile, http::Request<_>>()
+            // FIXME Used by tap.
+            //.push_http_insert_target()
             .push_on_response(
                 svc::layers()
                     .push(http_admit_request)
@@ -446,10 +448,8 @@ impl Config {
                     .box_http_request()
                     .box_http_response(),
             )
-            .instrument(
-                |addrs: &listen::Addrs| info_span!("source", target.addr = %addrs.target_addr()),
-            )
-            .check_new_service::<listen::Addrs, http::Request<_>>()
+            .instrument(|p: &endpoint::Profile| info_span!("source", target.addr = %p.target_addr))
+            .check_new_service::<endpoint::Profile, http::Request<_>>()
             .into_inner()
             .into_make_service();
 
@@ -487,23 +487,29 @@ impl Config {
             .spawn_buffer(buffer_capacity)
             .check_make_service::<SocketAddr, ()>()
             .push(svc::layer::mk(tcp::Forward::new))
-            .instrument(|a: &SocketAddr| info_span!("tcp", dst = %a));
+            .instrument(|a: &SocketAddr| info_span!("tcp", dst = %a))
+            .push_map_target(|p: endpoint::Profile| p.target_addr)
+            .check_service::<endpoint::Profile>();
 
-        let http = http::DetectHttp::new(
+        let http = svc::stack(http::DetectHttp::new(
             h2_settings,
             detect_protocol_timeout,
             http_server,
             tcp_balance,
             drain.clone(),
-        );
+        ))
+        .check_service::<endpoint::Profile>();
 
         let tcp_forward = svc::stack(tcp_connect)
             .push_make_thunk()
             .push(svc::layer::mk(tcp::Forward::new))
             .push(admit::AdmitLayer::new(prevent_loop))
-            .push_map_target(TcpEndpoint::from);
+            .push_map_target(|p: endpoint::Profile| TcpEndpoint::from(p.target_addr))
+            .check_service::<endpoint::Profile>();
 
-        let accept = svc::stack(SkipDetect::new(skip_detect, http, tcp_forward))
+        let accept = svc::stack(svc::stack::MakeSwitch::new(skip_detect, http, tcp_forward))
+            .into_new_service()
+            .push_map_target(endpoint::Profile::from)
             // Discovers the service profile from the control plane and passes
             // it to inner stack to build the router and traffic split.
             .push(profiles::discover::layer(profiles_client))

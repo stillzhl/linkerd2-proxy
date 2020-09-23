@@ -13,7 +13,6 @@ use std::time::Duration;
 use tower::layer::util::{Identity, Stack as Pair};
 pub use tower::layer::Layer;
 pub use tower::make::MakeService;
-use tower::spawn_ready::SpawnReadyLayer;
 pub use tower::util::{Either, Oneshot};
 pub use tower::{service_fn as mk, Service, ServiceExt};
 
@@ -99,8 +98,8 @@ impl<L> Layers<L> {
         self.push(stack::OnResponseLayer::new(layer))
     }
 
-    pub fn push_spawn_ready(self) -> Layers<Pair<L, SpawnReadyLayer>> {
-        self.push(SpawnReadyLayer::new())
+    pub fn push_spawn_ready(self) -> Layers<Pair<L, stack::SpawnReadyLayer>> {
+        self.push(stack::SpawnReadyLayer::new())
     }
 
     pub fn push_concurrency_limit(self, max: usize) -> Layers<Pair<L, concurrency_limit::Layer>> {
@@ -209,8 +208,8 @@ impl<S> Stack<S> {
         self.push(stack::OnResponseLayer::new(layer))
     }
 
-    pub fn push_spawn_ready(self) -> Stack<tower::spawn_ready::MakeSpawnReady<S>> {
-        self.push(SpawnReadyLayer::new())
+    pub fn push_spawn_ready(self) -> Stack<stack::MakeSpawnReady<S>> {
+        self.push(stack::SpawnReadyLayer::new())
     }
 
     pub fn push_concurrency_limit(

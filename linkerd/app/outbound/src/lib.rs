@@ -299,14 +299,14 @@ impl Config {
 
         // Builds a balancer for each concrete destination.
         let concrete = svc::stack(endpoint.clone())
-            .check_make_service::<HttpEndpoint, http::Request<http::boxed::Payload>>()
+            .check_new_service::<HttpEndpoint, http::Request<http::boxed::Payload>>()
             .push_on_response(
                 svc::layers()
                     .push(metrics.stack.layer(stack_labels("balance.endpoint")))
                     .box_http_request(),
             )
             .push_spawn_ready()
-            .check_make_service::<HttpEndpoint, http::Request<_>>()
+            .check_new_service::<HttpEndpoint, http::Request<_>>()
             .push(discover)
             .check_service::<HttpConcrete>()
             .push_on_response(

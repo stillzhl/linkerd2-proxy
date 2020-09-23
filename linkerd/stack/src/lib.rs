@@ -14,6 +14,7 @@ pub mod on_response;
 mod oneshot;
 mod proxy;
 mod result;
+pub mod spawn_ready;
 mod switch;
 
 pub use self::fallback::{Fallback, FallbackLayer};
@@ -27,4 +28,5 @@ pub use self::on_response::{OnResponse, OnResponseLayer};
 pub use self::oneshot::{Oneshot, OneshotLayer};
 pub use self::proxy::{Proxy, ProxyService};
 pub use self::result::ResultService;
+pub use self::spawn_ready::{MakeSpawnReady, SpawnReady, SpawnReadyLayer};
 pub use self::switch::{MakeSwitch, Switch};

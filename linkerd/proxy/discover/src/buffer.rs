@@ -1,5 +1,6 @@
 use futures::{ready, Stream, TryFuture};
 use linkerd2_error::{Error, Never};
+use linkerd2_stack::NewService;
 use pin_project::pin_project;
 use std::fmt;
 use std::future::Future;
@@ -115,6 +116,36 @@ where
         tokio::spawn(fut.in_current_span());
 
         Poll::Ready(Ok(Discover { rx, _disconnect_tx }))
+    }
+}
+
+impl<T, M, D> NewService<T> for Buffer<M>
+where
+    T: fmt::Display,
+    M: NewService<T, Service = D>,
+    D: discover::Discover + Send + 'static,
+    D::Error: Into<Error>,
+    D::Key: Send,
+    D::Service: Send,
+{
+    type Service = Discover<D::Key, D::Service>;
+
+    fn new_service(&mut self, req: T) -> Self::Service {
+        let discover = self.inner.new_service(req);
+        // XXX(eliza): one impl shared between the `DiscoverFuture` and
+        // `NewService` impls could be nice...
+        let (tx, rx) = mpsc::channel(self.capacity);
+        let (_disconnect_tx, disconnect_rx) = oneshot::channel();
+        let fut = Daemon {
+            discover,
+            disconnect_rx,
+            tx,
+            watchdog_timeout: self.watchdog_timeout,
+            watchdog: None,
+        };
+        tokio::spawn(fut.in_current_span());
+
+        Discover { rx, _disconnect_tx }
     }
 }
 

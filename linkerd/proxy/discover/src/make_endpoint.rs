@@ -1,6 +1,7 @@
 use futures::{ready, stream::FuturesUnordered, Stream, TryFuture};
 use indexmap::IndexMap;
 use linkerd2_error::Error;
+use linkerd2_stack::NewService;
 use pin_project::pin_project;
 use std::future::Future;
 use std::hash::Hash;
@@ -92,6 +93,26 @@ where
             future,
             make_endpoint: Some(self.make_endpoint.clone()),
         }
+    }
+}
+
+impl<T, D, E, InnerDiscover> NewService<T> for MakeEndpoint<D, E>
+where
+    D: NewService<T, Service = InnerDiscover>,
+    InnerDiscover: discover::Discover,
+    InnerDiscover::Key: Hash + Clone,
+    InnerDiscover::Error: Into<Error>,
+    E: tower::Service<InnerDiscover::Service> + Clone,
+    E::Error: Into<Error>,
+{
+    type Service = Discover<D::Service, E>;
+
+    #[inline]
+    fn new_service(&mut self, target: T) -> Self::Service {
+        Discover::new(
+            self.make_discover.new_service(target),
+            self.make_endpoint.clone(),
+        )
     }
 }
 

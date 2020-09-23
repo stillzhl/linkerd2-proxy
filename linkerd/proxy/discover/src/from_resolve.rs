@@ -27,13 +27,21 @@ pub struct DiscoverFuture<F, E> {
 /// Observes an `R`-typed resolution stream, using an `M`-typed endpoint stack to
 /// build a service for each endpoint.
 #[pin_project]
-pub struct Discover<R: TryStream, E> {
+pub struct Discover<F: TryFuture, E> {
     #[pin]
-    resolution: R,
-    active: HashSet<SocketAddr>,
-    pending: VecDeque<Change<SocketAddr, E>>,
+    state: DiscoverState<F, E>,
 }
 
+#[pin_project(project = DiscoverStateProj)]
+enum DiscoverState<F: TryFuture, E> {
+    Resolving(#[pin] F),
+    Streaming {
+        #[pin]
+        resolution: F::Ok,
+        active: HashSet<SocketAddr>,
+        pending: VecDeque<Change<SocketAddr, E>>,
+    },
+}
 // === impl FromResolve ===
 
 impl<R, E> FromResolve<R, E> {
@@ -87,69 +95,81 @@ where
 
 // === impl Discover ===
 
-impl<R: TryStream, E> Discover<R, E> {
-    pub fn new(resolution: R) -> Self {
-        Self {
-            resolution,
-            active: HashSet::default(),
-            pending: VecDeque::new(),
-        }
-    }
-}
+// impl<R: TryStream, E> Discover<R, E> {
+//     pub fn new(resolution: R) -> Self {
+//         Self {
+//             resolution,
+//             active: HashSet::default(),
+//             pending: VecDeque::new(),
+//         }
+//     }
+// }
 
-impl<R, E> Stream for Discover<R, E>
+impl<F, E> Stream for Discover<F, E>
 where
-    R: TryStream<Ok = Update<E>>,
+    F: TryFuture
+    F::Ok: TryStream<Ok = Update<E>, Error = F::Error>,
     E: Clone + PartialEq,
 {
-    type Item = Result<Change<SocketAddr, E>, R::Error>;
+    type Item = Result<Change<SocketAddr, E>, F::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             let this = self.as_mut().project();
-            if let Some(change) = this.pending.pop_front() {
-                return Poll::Ready(Some(Ok(change)));
+            match this.state.as_mut().project() {
+                DiscoverStateProj::Resolving(f) => {
+                    let resolution = ready!(f.try_poll(cx))?;
+                    this.state.set(DiscoverState::Streaming { 
+                        resolution, active: HashSet::default(), pending: VecDeque::new(),
+                    });
+                }
+                this => {
+                    if let Some(change) = this.pending.pop_front() {
+                        return Poll::Ready(Some(Ok(change)));
+                    }
+        
+                    match ready!(this.resolution.try_poll_next(cx)) {
+                        Some(update) => match update? {
+                            Update::Reset(endpoints) => {
+                                let active = endpoints.iter().map(|(a, _)| *a).collect::<HashSet<_>>();
+                                for addr in this.active.iter() {
+                                    // If the old addr is not in the new set, remove it.
+                                    if !active.contains(addr) {
+                                        this.pending.push_back(Change::Remove(*addr));
+                                    }
+                                }
+                                for (addr, endpoint) in endpoints.into_iter() {
+                                    if !this.active.contains(&addr) {
+                                        this.pending
+                                            .push_back(Change::Insert(addr, endpoint.clone()));
+                                    }
+                                }
+                                *this.active = active;
+                            }
+                            Update::Add(endpoints) => {
+                                for (addr, endpoint) in endpoints.into_iter() {
+                                    this.active.insert(addr);
+                                    this.pending.push_back(Change::Insert(addr, endpoint));
+                                }
+                            }
+                            Update::Remove(addrs) => {
+                                for addr in addrs.into_iter() {
+                                    if this.active.remove(&addr) {
+                                        this.pending.push_back(Change::Remove(addr));
+                                    }
+                                }
+                            }
+                            Update::DoesNotExist => {
+                                this.pending.extend(this.active.drain().map(Change::Remove));
+                            }
+                        },
+                        None => return Poll::Ready(None),
+                    }
+                }
+                }
+        }}
             }
-
-            match ready!(this.resolution.try_poll_next(cx)) {
-                Some(update) => match update? {
-                    Update::Reset(endpoints) => {
-                        let active = endpoints.iter().map(|(a, _)| *a).collect::<HashSet<_>>();
-                        for addr in this.active.iter() {
-                            // If the old addr is not in the new set, remove it.
-                            if !active.contains(addr) {
-                                this.pending.push_back(Change::Remove(*addr));
-                            }
-                        }
-                        for (addr, endpoint) in endpoints.into_iter() {
-                            if !this.active.contains(&addr) {
-                                this.pending
-                                    .push_back(Change::Insert(addr, endpoint.clone()));
-                            }
-                        }
-                        *this.active = active;
-                    }
-                    Update::Add(endpoints) => {
-                        for (addr, endpoint) in endpoints.into_iter() {
-                            this.active.insert(addr);
-                            this.pending.push_back(Change::Insert(addr, endpoint));
-                        }
-                    }
-                    Update::Remove(addrs) => {
-                        for addr in addrs.into_iter() {
-                            if this.active.remove(&addr) {
-                                this.pending.push_back(Change::Remove(addr));
-                            }
-                        }
-                    }
-                    Update::DoesNotExist => {
-                        this.pending.extend(this.active.drain().map(Change::Remove));
-                    }
-                },
-                None => return Poll::Ready(None),
-            }
-        }
-    }
+            
 }
 
 #[cfg(test)]

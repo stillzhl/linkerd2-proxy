@@ -307,8 +307,9 @@ impl Config {
             )
             .push_spawn_ready()
             .check_new_service::<HttpEndpoint, http::Request<_>>()
+            .into_make_service()
             .push(discover)
-            .check_service::<HttpConcrete>()
+            .check_new_service::<HttpConcrete, _>()
             .push_on_response(
                 svc::layers()
                     .push(http::balance::layer(EWMA_DEFAULT_RTT, EWMA_DECAY))
@@ -317,7 +318,6 @@ impl Config {
                     .push_failfast(dispatch_timeout)
                     .push(metrics.stack.layer(stack_labels("concrete"))),
             )
-            .into_new_service()
             .instrument(|c: &HttpConcrete| info_span!("concrete", dst = %c.dst))
             .check_new_service::<HttpConcrete, http::Request<_>>();
 

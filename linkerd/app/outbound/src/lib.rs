@@ -20,8 +20,8 @@ use linkerd2_app_core::{
     spans::SpanConverter,
     svc::{self},
     transport::{self, listen, tls},
-    Addr, Conditional, DiscoveryRejected, Error, Never, ProxyMetrics, StackMetrics,
-    TraceContextLayer, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER, L5D_REQUIRE_ID,
+    Addr, Conditional, DiscoveryRejected, Error, ProxyMetrics, StackMetrics, TraceContextLayer,
+    CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER, L5D_REQUIRE_ID,
 };
 use std::{
     collections::HashMap,
@@ -173,11 +173,9 @@ impl Config {
         tap_layer: tap::Layer,
         metrics: ProxyMetrics,
         span_sink: Option<mpsc::Sender<oc::Span>>,
-    ) -> impl tower::Service<
+    ) -> impl svc::NewService<
         HttpEndpoint,
-        Error = Never,
-        Future = impl Unpin + Send,
-        Response = impl tower::Service<
+        Service = impl tower::Service<
             http::Request<B>,
             Response = http::Response<http::boxed::Payload>,
             Error = Error,
@@ -235,6 +233,7 @@ impl Config {
             .push_on_response(svc::layers().box_http_response())
             .check_service::<HttpEndpoint>()
             .instrument(|e: &HttpEndpoint| info_span!("endpoint", peer.addr = %e.addr))
+            .into_new_service()
             .into_inner()
     }
 
@@ -260,9 +259,7 @@ impl Config {
     where
         B: http::HttpBody<Error = Error> + std::fmt::Debug + Default + Send + 'static,
         B::Data: Send + 'static,
-        E: tower::Service<HttpEndpoint, Response = S> + Unpin + Clone + Send + Sync + 'static,
-        E::Error: Into<Error>,
-        E::Future: Unpin + Send,
+        E: svc::NewService<HttpEndpoint, Service = S> + Unpin + Clone + Send + Sync + 'static,
         S: tower::Service<
                 http::Request<http::boxed::Payload>,
                 Response = http::Response<http::boxed::Payload>,

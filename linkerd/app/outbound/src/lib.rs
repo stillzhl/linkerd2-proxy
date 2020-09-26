@@ -5,7 +5,9 @@
 
 #![deny(warnings, rust_2018_idioms)]
 
-pub use self::endpoint::{HttpConcrete, HttpEndpoint, HttpLogical, LogicalPerRequest, TcpEndpoint};
+pub use self::endpoint::{
+    HttpConcrete, HttpEndpoint, HttpLogical, LogicalPerRequest, TcpEndpoint, TcpLogical,
+};
 use futures::future;
 use linkerd2_app_core::{
     admit, classify,
@@ -20,8 +22,8 @@ use linkerd2_app_core::{
     spans::SpanConverter,
     svc::{self},
     transport::{self, listen, tls},
-    Addr, Conditional, DiscoveryRejected, Error, ProxyMetrics, StackMetrics, TraceContextLayer,
-    CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER, L5D_REQUIRE_ID,
+    Conditional, Error, ProxyMetrics, StackMetrics, TraceContextLayer, CANONICAL_DST_HEADER,
+    DST_OVERRIDE_HEADER, L5D_REQUIRE_ID,
 };
 use std::{collections::HashMap, net, time::Duration};
 use tokio::sync::mpsc;
@@ -82,7 +84,7 @@ impl Config {
         connect: C,
         resolve: E,
     ) -> impl svc::NewService<
-        endpoint::Accept,
+        TcpLogical,
         Service = impl tower::Service<
             I,
             Response = (),
@@ -99,7 +101,11 @@ impl Config {
         C: tower::Service<TcpEndpoint, Error = Error> + Unpin + Clone + Send + Sync + 'static,
         C::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
         C::Future: Unpin + Send,
-        E: Resolve<Addr, Endpoint = proxy::api_resolve::Metadata> + Unpin + Clone + Send + 'static,
+        E: Resolve<TcpLogical, Endpoint = proxy::api_resolve::Metadata>
+            + Unpin
+            + Clone
+            + Send
+            + 'static,
         E::Future: Unpin + Send,
         E::Resolution: Unpin + Send,
         I: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::fmt::Debug + Unpin + Send + 'static,
@@ -117,16 +123,14 @@ impl Config {
                 resolve,
             )))
             .push(discover::buffer(1_000, cache_max_idle_age))
-            .push_map_target(Into::<Addr>::into)
+            .check_service::<TcpLogical>()
             .push_on_response(
                 svc::layers()
                     .push(tcp::balance::layer(EWMA_DEFAULT_RTT, EWMA_DECAY))
                     .push(svc::layer::mk(tcp::Forward::new))
             )
-            .instrument(|_: &_| info_span!("tcp"))
-            .check_make_service::<endpoint::Accept, I>()
             .into_new_service()
-            .into_inner()
+            .check_new_service::<TcpLogical, I>()
     }
 
     pub fn build_dns_refine(
@@ -298,7 +302,7 @@ impl Config {
             .push(discover::buffer(1_000, cache_max_idle_age));
 
         // Builds a balancer for each concrete destination.
-        let concrete = svc::stack(endpoint.clone())
+        let concrete = svc::stack(endpoint)
             .check_new_service::<HttpEndpoint, http::Request<http::boxed::Payload>>()
             .push_on_response(
                 svc::layers()
@@ -358,23 +362,11 @@ impl Config {
             .push(profiles::discover::layer(profiles_client))
             .check_new_service::<HttpLogical, http::Request<_>>();
 
-        // Caches clients that bypass discovery/balancing.
-        let forward = svc::stack(endpoint)
-            .instrument(|t: &HttpEndpoint| debug_span!("forward", peer.id = ?t.identity))
-            .check_new_service::<HttpEndpoint, http::Request<_>>();
-
         // Attempts to route route request to a logical services that uses
         // control plane for discovery. If the discovery is rejected, the
         // `forward` stack is used instead, bypassing load balancing, etc.
         logical
             .push_on_response(svc::layers().box_http_response())
-            .push_fallback_with_predicate(
-                forward
-                    .push_map_target(HttpEndpoint::from)
-                    .push_on_response(svc::layers().box_http_response().box_http_request())
-                    .into_inner(),
-                is_discovery_rejected,
-            )
             .cache(
                 svc::layers().push_on_response(
                     svc::layers()
@@ -417,7 +409,11 @@ impl Config {
            + 'static
     where
         I: tokio::io::AsyncRead + tokio::io::AsyncWrite + std::fmt::Debug + Unpin + Send + 'static,
-        E: Resolve<Addr, Endpoint = proxy::api_resolve::Metadata> + Unpin + Clone + Send + 'static,
+        E: Resolve<TcpLogical, Endpoint = proxy::api_resolve::Metadata>
+            + Unpin
+            + Clone
+            + Send
+            + 'static,
         E::Future: Unpin + Send,
         E::Resolution: Unpin + Send,
         R: tower::Service<dns::Name, Error = Error, Response = dns::Name>
@@ -497,20 +493,17 @@ impl Config {
 
         // Load balances TCP streams that cannot be decoded as HTTP.
         let tcp_balance = svc::stack(self.build_tcp_balance(tcp_connect.clone(), resolve))
-            .push_fallback_with_predicate(
-                svc::stack(tcp_connect.clone())
-                    .push_make_thunk()
-                    .push_on_response(svc::layer::mk(tcp::Forward::new))
-                    .instrument(|_: &TcpEndpoint| info_span!("forward"))
-                    .check_new::<TcpEndpoint>()
-                    .push_map_target(TcpEndpoint::from)
-                    .into_inner(),
-                is_discovery_rejected,
+            .cache(
+                svc::layers().push_on_response(
+                    svc::layers()
+                        .push_failfast(dispatch_timeout)
+                        .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age),
+                ),
             )
-            .push_on_response(svc::layers().push_spawn_buffer(buffer_capacity))
-            .check_new_service::<endpoint::Accept, transport::io::PrefixedIo<SensorIo<I>>>()
-            .instrument(|_: &_| info_span!("tcp"))
             .into_make_service()
+            .spawn_buffer(buffer_capacity)
+            .instrument(|_: &_| info_span!("tcp"))
+            .push_map_target(TcpLogical::from)
             .into_inner();
 
         let http = svc::stack(http::DetectHttp::new(
@@ -526,7 +519,7 @@ impl Config {
         .into_new_service()
         .into_inner();
 
-        let tcp_forward = svc::stack(tcp_connect.clone())
+        let tcp_forward = svc::stack(tcp_connect)
             .push_make_thunk()
             .push_on_response(svc::layer::mk(tcp::Forward::new))
             .instrument(|_: &TcpEndpoint| info_span!("forward"))
@@ -597,18 +590,6 @@ pub fn trace_labels() -> HashMap<String, String> {
     let mut l = HashMap::new();
     l.insert("direction".to_string(), "outbound".to_string());
     l
-}
-
-fn is_discovery_rejected(err: &Error) -> bool {
-    fn is_rejected(err: &(dyn std::error::Error + 'static)) -> bool {
-        err.is::<DiscoveryRejected>()
-            || err.is::<profiles::InvalidProfileAddr>()
-            || err.source().map(is_rejected).unwrap_or(false)
-    }
-
-    let rejected = is_rejected(&**err);
-    tracing::debug!(rejected, %err);
-    rejected
 }
 
 fn is_loop(err: &(dyn std::error::Error + 'static)) -> bool {

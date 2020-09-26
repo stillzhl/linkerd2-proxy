@@ -164,8 +164,6 @@ pub const ENV_HOSTNAME: &str = "HOSTNAME";
 pub const ENV_TRACE_COLLECTOR_SVC_BASE: &str = "LINKERD2_PROXY_TRACE_COLLECTOR_SVC";
 
 pub const ENV_DESTINATION_CONTEXT: &str = "LINKERD2_PROXY_DESTINATION_CONTEXT";
-pub const ENV_DESTINATION_PROFILE_INITIAL_TIMEOUT: &str =
-    "LINKERD2_PROXY_DESTINATION_PROFILE_INITIAL_TIMEOUT";
 
 pub const ENV_TAP_DISABLED: &str = "LINKERD2_PROXY_TAP_DISABLED";
 pub const ENV_TAP_SVC_NAME: &str = "LINKERD2_PROXY_TAP_SVC_NAME";
@@ -229,7 +227,6 @@ const DEFAULT_OUTBOUND_MAX_IN_FLIGHT: usize = DEFAULT_BUFFER_CAPACITY;
 
 const DEFAULT_DESTINATION_GET_SUFFIXES: &str = "svc.cluster.local.";
 const DEFAULT_DESTINATION_PROFILE_SUFFIXES: &str = "svc.cluster.local.";
-const DEFAULT_DESTINATION_PROFILE_INITIAL_TIMEOUT: Duration = Duration::from_millis(500);
 
 const DEFAULT_IDENTITY_MIN_REFRESH: Duration = Duration::from_secs(10);
 const DEFAULT_IDENTITY_MAX_REFRESH: Duration = Duration::from_secs(60 * 60 * 24);
@@ -332,11 +329,6 @@ pub fn parse_config<S: Strings>(strings: &S) -> Result<super::Config, EnvError> 
     let gateway_suffixes = parse(strings, ENV_INBOUND_GATEWAY_SUFFIXES, parse_dns_suffixes);
     let dst_get_suffixes = parse(strings, ENV_DESTINATION_GET_SUFFIXES, parse_dns_suffixes);
     let dst_get_networks = parse(strings, ENV_DESTINATION_GET_NETWORKS, parse_networks);
-    let dst_profile_initial_timeout = parse(
-        strings,
-        ENV_DESTINATION_PROFILE_INITIAL_TIMEOUT,
-        parse_duration,
-    );
     let dst_profile_suffixes = parse(
         strings,
         ENV_DESTINATION_PROFILE_SUFFIXES,
@@ -499,8 +491,6 @@ pub fn parse_config<S: Strings>(strings: &S) -> Result<super::Config, EnvError> 
             profile_suffixes: dst_profile_suffixes?
                 .unwrap_or(parse_dns_suffixes(DEFAULT_DESTINATION_PROFILE_SUFFIXES).unwrap()),
             profile_networks: dst_profile_networks?.unwrap_or_default(),
-            initial_profile_timeout: dst_profile_initial_timeout?
-                .unwrap_or(DEFAULT_DESTINATION_PROFILE_INITIAL_TIMEOUT),
             control: ControlConfig {
                 addr,
                 connect,

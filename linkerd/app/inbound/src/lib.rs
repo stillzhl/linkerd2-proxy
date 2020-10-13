@@ -28,7 +28,7 @@ use linkerd2_app_core::{
     transport::{self, io, listen, tls},
     Error, NameAddr, NameMatch, ProxyMetrics, TraceContext, DST_OVERRIDE_HEADER,
 };
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt, time::Duration};
 use tokio::{net::TcpStream, sync::mpsc};
 use tracing::{debug_span, info_span};
 
@@ -107,7 +107,7 @@ impl Config {
         )
     }
 
-    pub fn build_server<L, S, P, C>(
+    pub fn build_server<L, S, P, C, I>(
         self,
         tcp_connect: C,
         prevent_loop: PreventLoop,
@@ -121,18 +121,32 @@ impl Config {
     ) -> impl svc::NewService<
         listen::Addrs,
         Service = impl tower::Service<
-            tokio::net::TcpStream,
+            I,
             Response = (),
             Error = impl Into<Error>,
             Future = impl Send + 'static,
-        > + Send
-                      + 'static,
+        >
+                      + Send
+                      + 'static
+                      + Sized,
     > + Send
            + 'static
     where
-        C: tower::Service<TcpEndpoint, Error = Error> + Unpin + Clone + Send + Sync + 'static,
-        C::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-        C::Future: Unpin + Send,
+        C: tower::Service<TcpEndpoint>
+            + tower::Service<HttpEndpoint>
+            + Unpin
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        <C as tower::Service<TcpEndpoint>>::Response:
+            tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        <C as tower::Service<TcpEndpoint>>::Future: Unpin + Send,
+        <C as tower::Service<TcpEndpoint>>::Error: Into<Error>,
+        <C as tower::Service<HttpEndpoint>>::Response:
+            tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        <C as tower::Service<HttpEndpoint>>::Future: Unpin + Send,
+        <C as tower::Service<HttpEndpoint>>::Error: Into<Error>,
         L: svc::NewService<Target, Service = S> + Unpin + Clone + Send + Sync + 'static,
         S: tower::Service<
                 http::Request<http::boxed::Payload>,
@@ -145,6 +159,7 @@ impl Config {
         P: profiles::GetProfile<NameAddr> + Unpin + Clone + Send + 'static,
         P::Future: Unpin + Send,
         P::Error: Send,
+        I: tokio::io::AsyncRead + tokio::io::AsyncWrite + fmt::Debug + Unpin + Send + 'static,
     {
         let http_router = self.build_http_router(
             tcp_connect.clone(),
@@ -444,7 +459,7 @@ impl Config {
         .into_inner()
     }
 
-    pub fn build_tls_accept<D, A, F, B>(
+    pub fn build_tls_accept<D, A, F, B, I>(
         self,
         detect: D,
         tcp_forward: F,
@@ -453,7 +468,7 @@ impl Config {
     ) -> impl svc::NewService<
         listen::Addrs,
         Service = impl tower::Service<
-            TcpStream,
+            I,
             Response = (),
             Error = impl Into<Error>,
             Future = impl Send + 'static,
@@ -462,12 +477,13 @@ impl Config {
     > + Send
            + 'static
     where
+        I: io::AsyncRead + io::AsyncWrite + Unpin + Send + 'static,
         D: svc::NewService<TcpAccept, Service = A> + Unpin + Clone + Send + Sync + 'static,
         A: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Unpin + Send + 'static,
         A::Error: Into<Error>,
         A::Future: Send,
         F: svc::NewService<TcpEndpoint, Service = B> + Unpin + Clone + Send + Sync + 'static,
-        B: tower::Service<SensorIo<TcpStream>, Response = ()> + Unpin + Send + 'static,
+        B: tower::Service<SensorIo<I>, Response = ()> + Unpin + Send + 'static,
         B::Error: Into<Error>,
         B::Future: Send,
     {

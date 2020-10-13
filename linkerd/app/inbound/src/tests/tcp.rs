@@ -1,9 +1,9 @@
 use super::*;
 use crate::TcpEndpoint;
 use linkerd2_app_core::{
-    drain, metrics, svc,
+    drain, metrics, proxy, svc,
     transport::{listen, tls},
-    Addr, NameAddr, proxy, Error
+    Addr, Error, NameAddr,
 };
 use linkerd2_app_test as test_support;
 use std::{net::SocketAddr, time::Duration};
@@ -19,7 +19,7 @@ async fn plaintext_tcp() {
     // bind any of these addresses. Therefore, we don't need to use ephemeral
     // ports or anything. These will just be used so that the proxy has a socket
     // address to resolve, etc.
-    let target_addr = SocketAddr::new([0, 0, 0, 0].into(), 666);
+    let target_addr = SocketAddr::new([127, 0, 0, 1].into(), 666);
     let concrete = TcpConcrete {
         logical: TcpLogical {
             addr: target_addr,
@@ -217,7 +217,7 @@ async fn resolutions_are_reused() {
 fn build_server<I>(
     cfg: Config,
     profiles: resolver::Profiles<NameAddr>,
-    connect: Connect<TcpEndpoint>,
+    connect: Connect<SocketAddr>,
 ) -> impl svc::NewService<
     listen::Addrs,
     Service = impl tower::Service<
@@ -235,15 +235,13 @@ where
     let (metrics, _) = metrics::Metrics::new(Duration::from_secs(10));
     let (_, drain) = drain::channel();
     let (_, tap, _) = proxy::tap::new();
-    cfg.build(
-        SocketAddr::new([127, 0, 0, 1].into(), 4143),
-        tls::Conditional::None, // XXX(eliza): add local identity!
-
+    cfg.build_server(
+        connect,
+        crate::PreventLoop::from(4143),
+        tls::Conditional::None(tls::ReasonForNoPeerName::LocalIdentityDisabled), // XXX(eliza): add local identity!
         test_support::service::no_http(),
         profiles,
-        resolver,
-        connect,
-        ,
+        tap,
         metrics.inbound,
         None,
         drain,

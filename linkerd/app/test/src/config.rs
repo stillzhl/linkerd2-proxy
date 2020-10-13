@@ -10,7 +10,6 @@ pub fn default_proxy(orig_dst: SocketAddr) -> ProxyConfig {
         connect: default_connect(),
         buffer_capacity: 10_000,
         cache_max_idle_age: Duration::from_secs(60),
-        disable_protocol_detection_for_ports: Default::default(),
         dispatch_timeout: Duration::from_secs(3),
         max_in_flight_requests: 10_000,
         detect_protocol_timeout: Duration::from_secs(3),

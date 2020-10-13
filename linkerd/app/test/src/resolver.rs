@@ -92,8 +92,9 @@ where
     }
 }
 
-impl<T, E> tower::Service<T> for Dst<T, E>
+impl<T, E, R> tower::Service<R> for Dst<T, E>
 where
+    R: Into<T>,
     T: Hash + Eq + std::fmt::Debug,
 {
     type Response = DstReceiver<E>;
@@ -104,7 +105,8 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, target: T) -> Self::Future {
+    fn call(&mut self, target: R) -> Self::Future {
+        let target = target.into();
         let span = tracing::trace_span!("mock_resolver", ?target);
         let _e = span.enter();
 

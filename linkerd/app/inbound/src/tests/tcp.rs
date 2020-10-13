@@ -1,21 +1,14 @@
 use super::*;
 use crate::TcpEndpoint;
 use linkerd2_app_core::{
-    drain, metrics,
-    svc::{self, NewService},
+    drain, metrics, svc,
     transport::{listen, tls},
-    Addr,
+    Addr, NameAddr, proxy, Error
 };
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use linkerd2_app_test as test_support;
+use std::{net::SocketAddr, time::Duration};
 use test_support::{connect::Connect, resolver};
 use tls::HasPeerIdentity;
-use tower::ServiceExt;
 use tracing_futures::Instrument;
 
 #[tokio::test(core_threads = 1)]
@@ -29,9 +22,8 @@ async fn plaintext_tcp() {
     let target_addr = SocketAddr::new([0, 0, 0, 0].into(), 666);
     let concrete = TcpConcrete {
         logical: TcpLogical {
-            orig_dst: target_addr,
+            addr: target_addr,
             profile: Some(profile()),
-            protocol: (),
         },
         resolve: Some(target_addr.into()),
     };
@@ -75,9 +67,8 @@ async fn tls_when_hinted() {
     let tls_addr = SocketAddr::new([0, 0, 0, 0].into(), 5550);
     let tls_concrete = TcpConcrete {
         logical: TcpLogical {
-            orig_dst: tls_addr,
+            addr: tls_addr,
             profile: Some(profile()),
-            protocol: (),
         },
         resolve: Some(tls_addr.into()),
     };
@@ -85,9 +76,8 @@ async fn tls_when_hinted() {
     let plain_addr = SocketAddr::new([0, 0, 0, 0].into(), 5551);
     let plain_concrete = TcpConcrete {
         logical: TcpLogical {
-            orig_dst: tls_addr,
+            addr: plain_addr,
             profile: Some(profile()),
-            protocol: (),
         },
         resolve: Some(plain_addr.into()),
     };
@@ -224,109 +214,9 @@ async fn resolutions_are_reused() {
     );
 }
 
-#[tokio::test]
-async fn load_balances() {
-    let _trace = test_support::trace_init();
-
-    let svc_addr = SocketAddr::new([10, 0, 142, 80].into(), 5550);
-    let endpoints = &[
-        (
-            SocketAddr::new([10, 0, 170, 42].into(), 5550),
-            Arc::new(AtomicUsize::new(0)),
-        ),
-        (
-            SocketAddr::new([10, 0, 170, 68].into(), 5550),
-            Arc::new(AtomicUsize::new(0)),
-        ),
-        (
-            SocketAddr::new([10, 0, 106, 66].into(), 5550),
-            Arc::new(AtomicUsize::new(0)),
-        ),
-    ];
-
-    let cfg = default_config(svc_addr);
-    let id_name = linkerd2_identity::Name::from_hostname(
-        b"foo.ns1.serviceaccount.identity.linkerd.cluster.local",
-    )
-    .expect("hostname is valid");
-
-    // Build a mock "connector" that returns the upstream "server" IO
-    let mut connect = test_support::connect();
-    for &(addr, ref conns) in endpoints {
-        let id_name = id_name.clone();
-        let conns = conns.clone();
-        connect = connect.endpoint_fn(addr, move |endpoint: TcpEndpoint| {
-            let num = conns.fetch_add(1, Ordering::Release) + 1;
-            tracing::info!(?addr, ?endpoint, num, "connecting");
-            assert_eq!(
-                endpoint.peer_identity(),
-                tls::Conditional::Some(id_name.clone())
-            );
-            let io = test_support::io()
-                .write(b"hello")
-                .read(b"world")
-                .read_error(std::io::ErrorKind::ConnectionReset.into())
-                .build();
-            Ok(io)
-        });
-    }
-
-    let profiles = test_support::profile::resolver().profile(svc_addr, Default::default());
-    let profile_state = profiles.handle();
-
-    let meta = test_support::resolver::Metadata::new(
-        Default::default(),
-        test_support::resolver::ProtocolHint::Unknown,
-        Some(id_name),
-        10_000,
-        None,
-    );
-
-    let resolver = test_support::resolver();
-    let mut dst = resolver.endpoint_tx(Addr::Socket(svc_addr));
-    dst.add(endpoints.iter().map(|&(addr, _)| (addr, meta.clone())))
-        .expect("still listening");
-    let resolve_state = resolver.handle();
-
-    // Build the outbound server
-    let mut server = build_server(cfg, profiles, resolver, connect);
-
-    let conns = (0..10)
-        .map(|i| {
-            tokio::spawn(
-                hello_world_client(svc_addr, &mut server)
-                    .instrument(tracing::info_span!("conn", i)),
-            )
-            .err_into::<Error>()
-        })
-        .collect::<Vec<_>>();
-
-    if let Err(e) = futures::future::try_join_all(conns).await {
-        panic!("connection panicked: {:?}", e);
-    }
-
-    for (addr, conns) in endpoints {
-        let conns = conns.load(Ordering::Acquire);
-        tracing::info!("endpoint {} was connected to {} times", addr, conns);
-        assert!(conns >= 1, "endpoint {} was never connected to!", addr);
-    }
-
-    assert!(resolve_state.is_empty());
-    assert!(
-        resolve_state.only_configured(),
-        "destinations were resolved multiple times for the same address!"
-    );
-    assert!(profile_state.is_empty());
-    assert!(
-        profile_state.only_configured(),
-        "profiles were resolved multiple times for the same address!"
-    );
-}
-
 fn build_server<I>(
     cfg: Config,
-    profiles: resolver::Profiles<SocketAddr>,
-    resolver: resolver::Dst<Addr, resolver::Metadata>,
+    profiles: resolver::Profiles<NameAddr>,
     connect: Connect<TcpEndpoint>,
 ) -> impl svc::NewService<
     listen::Addrs,
@@ -344,12 +234,17 @@ where
 {
     let (metrics, _) = metrics::Metrics::new(Duration::from_secs(10));
     let (_, drain) = drain::channel();
-    cfg.build_server(
+    let (_, tap, _) = proxy::tap::new();
+    cfg.build(
+        SocketAddr::new([127, 0, 0, 1].into(), 4143),
+        tls::Conditional::None, // XXX(eliza): add local identity!
+
+        test_support::service::no_http(),
         profiles,
         resolver,
         connect,
-        test_support::service::no_http(),
-        metrics.outbound,
+        ,
+        metrics.inbound,
         None,
         drain,
     )

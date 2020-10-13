@@ -37,6 +37,9 @@ pub mod endpoint;
 mod prevent_loop;
 mod require_identity_for_ports;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub allow_discovery: NameMatch,
@@ -91,6 +94,58 @@ impl Config {
     {
         let prevent_loop = PreventLoop::from(listen_addr.port());
         let tcp_connect = self.build_tcp_connect(prevent_loop, &metrics);
+        self.build_server(
+            tcp_connect,
+            prevent_loop,
+            local_identity,
+            http_loopback,
+            profiles_client,
+            tap_layer,
+            metrics,
+            span_sink,
+            drain,
+        )
+    }
+
+    pub fn build_server<L, S, P, C>(
+        self,
+        tcp_connect: C,
+        prevent_loop: PreventLoop,
+        local_identity: tls::Conditional<identity::Local>,
+        http_loopback: L,
+        profiles_client: P,
+        tap_layer: tap::Layer,
+        metrics: ProxyMetrics,
+        span_sink: Option<mpsc::Sender<oc::Span>>,
+        drain: drain::Watch,
+    ) -> impl svc::NewService<
+        listen::Addrs,
+        Service = impl tower::Service<
+            tokio::net::TcpStream,
+            Response = (),
+            Error = impl Into<Error>,
+            Future = impl Send + 'static,
+        > + Send
+                      + 'static,
+    > + Send
+           + 'static
+    where
+        C: tower::Service<TcpEndpoint, Error = Error> + Unpin + Clone + Send + Sync + 'static,
+        C::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+        C::Future: Unpin + Send,
+        L: svc::NewService<Target, Service = S> + Unpin + Clone + Send + Sync + 'static,
+        S: tower::Service<
+                http::Request<http::boxed::Payload>,
+                Response = http::Response<http::boxed::Payload>,
+            > + Unpin
+            + Send
+            + 'static,
+        S::Error: Into<Error>,
+        S::Future: Unpin + Send,
+        P: profiles::GetProfile<NameAddr> + Unpin + Clone + Send + 'static,
+        P::Future: Unpin + Send,
+        P::Error: Send,
+    {
         let http_router = self.build_http_router(
             tcp_connect.clone(),
             prevent_loop,

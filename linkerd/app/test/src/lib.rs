@@ -16,6 +16,7 @@ pub use tracing_subscriber::prelude::*;
 use std::fmt;
 pub use tokio_test::io;
 
+pub mod config;
 pub mod connect;
 pub mod profile;
 pub mod resolver;

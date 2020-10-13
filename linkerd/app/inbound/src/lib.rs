@@ -88,7 +88,6 @@ impl Config {
         let http_router = self.build_http_router(
             tcp_connect.clone(),
             prevent_loop,
-            http_loopback,
             profiles_client,
             tap_layer,
             metrics.clone(),
@@ -115,7 +114,6 @@ impl Config {
 
     pub fn build_tcp_connect(
         &self,
-        prevent_loop: PreventLoop,
         metrics: &ProxyMetrics,
     ) -> impl tower::Service<
         TcpEndpoint,
@@ -194,8 +192,6 @@ impl Config {
             ..
         } = self.clone();
 
-        let prevent_loop = prevent_loop.into();
-
         // Creates HTTP clients for each inbound port & HTTP settings.
         let endpoint = svc::stack(tcp_connect)
             .push(http::client::layer(connect.h2_settings))
@@ -259,12 +255,6 @@ impl Config {
         // Attempts to resolve the target as a service profile or, if that
         // fails, skips that stack to forward to the local endpoint.
         profile
-            .check_new_service::<Target, http::Request<http::boxed::Payload>>()
-            // If the traffic is targeted at the inbound port, send it through
-            // the loopback service (i.e. as a gateway).
-            .push_request_filter(prevent_loop)
-            .check_new_service::<Target, http::Request<http::boxed::Payload>>()
-            .push_fallback_on_error::<prevent_loop::LoopPrevented, _>(loopback)
             .check_new_service::<Target, http::Request<http::boxed::Payload>>()
             .cache(
                 svc::layers().push_on_response(
@@ -385,10 +375,12 @@ impl Config {
         .into_inner()
     }
 
-    pub fn build_tls_accept<D, A, F, B>(
+    pub fn build_tls_accept<D, DSvc, F, FSvc, L, LSvc>(
         self,
         detect: D,
         tcp_forward: F,
+        local_port: u16,
+        local: L,
         identity: tls::Conditional<identity::Local>,
         metrics: ProxyMetrics,
     ) -> impl svc::NewService<
@@ -403,14 +395,18 @@ impl Config {
     > + Send
            + 'static
     where
-        D: svc::NewService<TcpAccept, Service = A> + Unpin + Clone + Send + Sync + 'static,
-        A: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Unpin + Send + 'static,
-        A::Error: Into<Error>,
-        A::Future: Send,
-        F: svc::NewService<TcpEndpoint, Service = B> + Unpin + Clone + Send + Sync + 'static,
-        B: tower::Service<SensorIo<TcpStream>, Response = ()> + Unpin + Send + 'static,
-        B::Error: Into<Error>,
-        B::Future: Send,
+        D: svc::NewService<TcpAccept, Service = DSvc> + Unpin + Clone + Send + Sync + 'static,
+        DSvc: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Unpin + Send + 'static,
+        DSvc::Error: Into<Error>,
+        DSvc::Future: Send,
+        F: svc::NewService<TcpEndpoint, Service = FSvc> + Unpin + Clone + Send + Sync + 'static,
+        FSvc: tower::Service<SensorIo<TcpStream>, Response = ()> + Unpin + Send + 'static,
+        FSvc::Error: Into<Error>,
+        FSvc::Future: Send,
+        L: svc::NewService<TcpAccept, Service = LSvc> + Unpin + Clone + Send + Sync + 'static,
+        LSvc: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Unpin + Send + 'static,
+        LSvc::Error: Into<Error>,
+        LSvc::Future: Send,
     {
         let ProxyConfig {
             disable_protocol_detection_for_ports: skip_detect,
@@ -419,22 +415,38 @@ impl Config {
         } = self.proxy;
         let require_identity = self.require_identity_for_inbound_ports;
 
+        let tls = svc::stack(detect)
+            .push_request_filter(require_identity)
+            .push(metrics.transport.layer_accept())
+            .push_map_target(TcpAccept::from)
+            .push(tls::DetectTls::layer(
+                identity.clone(),
+                detect_protocol_timeout,
+            ))
+            .into_inner();
+
+        let opaque = svc::stack(tcp_forward)
+            .push_map_target(TcpEndpoint::from)
+            .push(metrics.transport.layer_accept())
+            .push_map_target(TcpAccept::from)
+            .into_inner();
+
+        let local = svc::stack(local)
+            .push(metrics.transport.layer_accept())
+            .push_map_target(TcpAccept::from)
+            .push(tls::DetectTls::layer(
+                identity.clone(),
+                detect_protocol_timeout,
+            ))
+            .into_inner();
+
+        // If the inbound connection targets the inbound port, use the `local` stack.
         svc::stack::MakeSwitch::new(
-            skip_detect,
-            svc::stack(detect)
-                .push_request_filter(require_identity)
-                .push(metrics.transport.layer_accept())
-                .push_map_target(TcpAccept::from)
-                .push(tls::DetectTls::layer(
-                    identity.clone(),
-                    detect_protocol_timeout,
-                ))
-                .into_inner(),
-            svc::stack(tcp_forward)
-                .push_map_target(TcpEndpoint::from)
-                .push(metrics.transport.layer_accept())
-                .push_map_target(TcpAccept::from)
-                .into_inner(),
+            move |a: &listen::Addrs| a.target_addr().port() == local_port,
+            local,
+            // Otherwise, try to detect identity unless the port was marked as
+            // opaque.
+            svc::stack::MakeSwitch::new(skip_detect, tls, opaque),
         )
     }
 }

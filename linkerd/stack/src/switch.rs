@@ -11,6 +11,12 @@ pub trait Switch<T> {
     fn use_primary(&self, target: &T) -> bool;
 }
 
+impl<T, F: Fn(&T) -> bool> Switch<T> for F {
+    fn use_primary(&self, target: &T) -> bool {
+        (self)(target)
+    }
+}
+
 /// Makes either the primary or fallback stack, as determined by an `S`-typed
 /// `Switch`.
 #[derive(Clone, Debug)]

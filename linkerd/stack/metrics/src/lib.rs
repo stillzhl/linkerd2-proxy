@@ -10,14 +10,13 @@ use linkerd2_metrics::{metrics, Counter, FmtLabels, FmtMetrics, Gauge};
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 metrics! {
     stack_create_total: Counter { "Total number of services created" },
     stack_drop_total: Counter { "Total number of services dropped" },
     stack_poll_total: Counter { "Total number of stack polls" },
     stack_poll_total_ms: Counter { "Total number of milliseconds this service has spent awaiting readiness" },
-    stack_poll_blocked_ms: Gauge { "Total number of milliseconds since this service was ready" }
+    stack_poll_pending: Gauge { "Indicates whether the stack is currently pending" }
 }
 
 type Shared<L> = Arc<Mutex<IndexMap<L, Arc<Metrics>>>>;
@@ -31,7 +30,7 @@ struct Metrics {
     drop_total: Counter,
     ready_total: Counter,
     not_ready_total: Counter,
-    blocked_since: Mutex<Option<Instant>>,
+    pending: Gauge,
     poll_millis: Counter,
     error_total: Counter,
 }
@@ -97,20 +96,8 @@ impl<L: FmtLabels + Hash + Eq> FmtMetrics for Registry<L> {
         stack_poll_total_ms.fmt_help(f)?;
         stack_poll_total_ms.fmt_scopes(f, metrics.iter(), |m| &m.poll_millis)?;
 
-        stack_poll_blocked_ms.fmt_help(f)?;
-        stack_poll_blocked_ms.fmt_scopes_owned(f, metrics.iter(), |m| {
-            let blocked_ms = m
-                .blocked_since
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|t| {
-                    let d = Instant::now() - *t;
-                    d.as_secs().saturating_mul(1000) + (d.subsec_millis() as u64)
-                })
-                .unwrap_or_else(|| 0);
-            Gauge::from(blocked_ms)
-        })?;
+        stack_poll_pending.fmt_help(f)?;
+        stack_poll_pending.fmt_scopes(f, metrics.iter(), |m| &m.pending)?;
 
         Ok(())
     }

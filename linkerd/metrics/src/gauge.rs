@@ -17,6 +17,11 @@ impl Gauge {
         self.0.fetch_sub(1, Ordering::Release);
     }
 
+    /// Set a new value
+    pub fn set(&self, value: u64) {
+        self.0.store(value, Ordering::Release);
+    }
+
     pub fn value(&self) -> u64 {
         self.0
             .load(Ordering::Acquire)

@@ -114,7 +114,8 @@ where
             svc::layers()
                 // Strips headers that may be set by this proxy.
                 .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
-                .push(svc::layers().box_http_response()),
+                .push(svc::layers().box_http_response())
+                .push(metrics.stack.layer(stack_labels("logical"))),
         )
         .instrument(|l: &Logical| debug_span!("logical", dst = %l.addr()))
         .check_new_service::<Logical, http::Request<_>>()

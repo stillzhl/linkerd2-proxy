@@ -1,5 +1,3 @@
-#![allow(unused_variables)]
-
 use crate::{http, stack_labels, tcp, trace_labels, Config};
 use linkerd2_app_core::{
     config::{ProxyConfig, ServerConfig},
@@ -72,17 +70,17 @@ where
             svc::layers()
                 .box_http_request()
                 // Limits the number of in-flight requests.
-                .push_concurrency_limit(max_in_flight_requests)
+                // .push_concurrency_limit(max_in_flight_requests)
                 // Eagerly fail requests when the proxy is out of capacity for a
                 // dispatch_timeout.
-                .push_failfast(dispatch_timeout)
-                .push(metrics.http_errors.clone())
+                // .push_failfast(dispatch_timeout)
+                // .push(metrics.http_errors.clone())
                 // Synthesizes responses for proxy errors.
                 .push(errors::layer())
                 // Initiates OpenCensus tracing.
-                .push(TraceContext::layer(span_sink.clone().map(|span_sink| {
-                    SpanConverter::server(span_sink, trace_labels())
-                })))
+                // .push(TraceContext::layer(span_sink.clone().map(|span_sink| {
+                //     SpanConverter::server(span_sink, trace_labels())
+                // })))
                 .push(metrics.stack.layer(stack_labels("source")))
                 .push_failfast(dispatch_timeout)
                 .push_spawn_buffer(buffer_capacity)

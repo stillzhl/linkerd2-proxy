@@ -4,6 +4,7 @@
 //! application to external network endpoints.
 
 #![deny(warnings, rust_2018_idioms)]
+#![allow(unused_imports, unused_variables, dead_code)]
 
 pub mod http;
 pub mod ingress;

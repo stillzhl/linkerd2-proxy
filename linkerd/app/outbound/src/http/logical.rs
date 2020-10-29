@@ -1,5 +1,3 @@
-#![allow(unused_imports, unused_variables)]
-
 use super::{Concrete, Endpoint, Logical};
 use crate::{resolve, stack_labels};
 use linkerd2_app_core::{
@@ -56,7 +54,7 @@ where
         .check_new_service::<Endpoint, http::Request<http::boxed::Payload>>()
         .push_on_response(
             svc::layers()
-                .push(svc::layer::mk(svc::SpawnReady::new))
+                //.push(svc::layer::mk(svc::SpawnReady::new))
                 .push(metrics.stack.layer(stack_labels("balance.endpoint")))
                 .box_http_request(),
         )
@@ -126,13 +124,13 @@ where
         //         .into_inner(),
         // ))
         .check_new_service::<Logical, http::Request<_>>()
-        .push(http::header_from_target::layer(CANONICAL_DST_HEADER))
-        .push_on_response(
-            svc::layers()
-                // Strips headers that may be set by this proxy.
-                .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
-                .box_http_response(),
-        )
+        //.push(http::header_from_target::layer(CANONICAL_DST_HEADER))
+        // .push_on_response(
+        //     svc::layers()
+        //         // Strips headers that may be set by this proxy.
+        //         .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
+        //         .box_http_response(),
+        // )
         .instrument(|l: &Logical| debug_span!("logical", dst = %l.addr()))
         .check_new_service::<Logical, http::Request<_>>()
         .into_inner()

@@ -16,7 +16,7 @@ use tracing::debug_span;
 
 pub fn stack<R, P, C, H, S, I>(
     config: &Config,
-    profiles: P,
+    _profiles: P,
     resolve: R,
     tcp_connect: C,
     http_router: H,
@@ -135,11 +135,12 @@ where
 
     svc::stack(svc::stack::MakeSwitch::new(SkipByProfile, http, tcp))
         .check_new_service::<tcp::Logical, transport::metrics::SensorIo<I>>()
-        .push_map_target(tcp::Logical::from)
-        .push(profiles::discover::layer(
-            profiles,
-            AllowProfile(config.allow_discovery.clone().into()),
-        ))
+        .push_map_target(|a| tcp::Logical::from((None, a)))
+        // .push_map_target(tcp::Logical::from)
+        // .push(profiles::discover::layer(
+        //     profiles,
+        //     AllowProfile(config.allow_discovery.clone().into()),
+        // ))
         .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
         .cache(
             svc::layers().push_on_response(

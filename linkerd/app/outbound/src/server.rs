@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use crate::{http, stack_labels, tcp, trace_labels, Config};
 use linkerd2_app_core::{
     config::{ProxyConfig, ServerConfig},
@@ -135,21 +137,21 @@ where
 
     svc::stack(svc::stack::MakeSwitch::new(SkipByProfile, http, tcp))
         .check_new_service::<tcp::Logical, transport::metrics::SensorIo<I>>()
-        //.push_map_target(|a| tcp::Logical::from((None, a)))
-        .push_map_target(tcp::Logical::from)
-        .push(profiles::discover::layer(
-            profiles,
-            AllowProfile(config.allow_discovery.clone().into()),
-        ))
-        .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
-        .cache(
-            svc::layers().push_on_response(
-                svc::layers()
-                    .push_failfast(dispatch_timeout)
-                    .push(metrics.stack.layer(stack_labels("accept.inner")))
-                    .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age),
-            ),
-        )
+        .push_map_target(|a| tcp::Logical::from((None, a)))
+        // .push_map_target(tcp::Logical::from)
+        // .push(profiles::discover::layer(
+        //     profiles,
+        //     AllowProfile(config.allow_discovery.clone().into()),
+        // ))
+        // .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
+        // .cache(
+        //     svc::layers().push_on_response(
+        //         svc::layers()
+        //             .push_failfast(dispatch_timeout)
+        //             .push(metrics.stack.layer(stack_labels("accept.inner")))
+        //             .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age),
+        //     ),
+        // )
         .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
         .push(metrics.transport.layer_accept())
         .push_map_target(tcp::Accept::from)

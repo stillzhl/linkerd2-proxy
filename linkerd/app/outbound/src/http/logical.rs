@@ -102,14 +102,14 @@ where
         .check_new_service::<Logical, http::Request<_>>()
         // Drives concrete stacks to readiness and makes the split
         // cloneable, as required by the retry middleware.
-        .push_on_response(
-            svc::layers()
-                .push_failfast(dispatch_timeout)
-                .push(metrics.stack.layer(stack_labels("logical.inner")))
-                .push_spawn_buffer(buffer_capacity)
-                .push(metrics.stack.layer(stack_labels("logical.outer"))),
-        )
-        .check_new_service::<Logical, http::Request<_>>()
+        // .push_on_response(
+        //     svc::layers()
+        //         .push_failfast(dispatch_timeout)
+        //         .push(metrics.stack.layer(stack_labels("logical.inner")))
+        //         .push_spawn_buffer(buffer_capacity)
+        //         .push(metrics.stack.layer(stack_labels("logical.outer"))),
+        // )
+        // .check_new_service::<Logical, http::Request<_>>()
         // .push(profiles::http::route_request::layer(
         //     svc::proxies()
         //         .push(metrics.http_route_actual.into_layer::<classify::Response>())

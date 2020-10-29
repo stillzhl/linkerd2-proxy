@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::{mpsc, watch};
 use tower::util::ServiceExt;
-use tracing::trace;
+use tracing::{debug, trace};
 
 pub(crate) async fn idle(max: std::time::Duration) -> IdleError {
     tokio::time::delay_for(max).await;
@@ -44,19 +44,21 @@ pub(crate) async fn run<S, Req, I>(
 
     // Drive requests from the queue to the inner service.
     loop {
+        trace!("Awaiting request");
         select_biased! {
             req = requests.recv().fuse() => {
                 match req {
                     None => return,
                     Some(InFlight { request, tx }) => {
-                       match service.ready_and().await {
+                        trace!("Awaiting readiness");
+                        match service.ready_and().await {
                             Ok(svc) => {
                                 trace!("Dispatching request");
                                 let _ = tx.send(Ok(Box::pin(svc.call(request).err_into::<Error>())));
                             }
                             Err(e) =>{
                                 let error = ServiceError(Arc::new(e.into()));
-                                trace!(%error, "Service failed");
+                                debug!(%error, "Service failed");
                                 let _ = ready.broadcast(Poll::Ready(Err(error.clone())));
                                 // Fail this request.
                                 let _ = tx.send(Err(error.clone().into()));
@@ -74,7 +76,7 @@ pub(crate) async fn run<S, Req, I>(
 
             e = idle().fuse() => {
                 let error = ServiceError(Arc::new(e.into()));
-                trace!(%error, "Idling out inner service");
+                debug!(%error, "Idling out inner service");
                 let _ = ready.broadcast(Poll::Ready(Err(error)));
                 return;
             }

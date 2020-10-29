@@ -285,19 +285,30 @@ mod sys {
 #[cfg(feature = "mock-orig-dst")]
 mod mock {
     use super::{OrigDstAddr, SocketAddr, TcpStream};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
-    #[derive(Copy, Clone, Debug)]
-    pub struct MockOrigDstAddr(SocketAddr);
+    #[derive(Clone, Debug)]
+    pub struct MockOrigDstAddr(Arc<Inner>);
 
-    impl From<SocketAddr> for MockOrigDstAddr {
-        fn from(addr: SocketAddr) -> Self {
-            MockOrigDstAddr(addr)
+    #[derive(Debug)]
+    struct Inner {
+        addrs: Vec<SocketAddr>,
+        index: AtomicUsize,
+    }
+
+    impl From<Vec<SocketAddr>> for MockOrigDstAddr {
+        fn from(addrs: Vec<SocketAddr>) -> Self {
+            MockOrigDstAddr(Arc::new(Inner {
+                addrs,
+                index: AtomicUsize::new(0),
+            }))
         }
     }
 
     impl OrigDstAddr for MockOrigDstAddr {
         fn orig_dst_addr(&self, _: &TcpStream) -> Option<SocketAddr> {
-            Some(self.0.clone())
+            let idx = self.0.index.fetch_add(1, Ordering::Release) % self.0.addrs.len();
+            Some(self.0.addrs[idx])
         }
     }
 }

@@ -56,10 +56,10 @@ pub const ENV_ADMIN_LISTEN_ADDR: &str = "LINKERD2_PROXY_ADMIN_LISTEN_ADDR";
 // configure the proxy's behavior.
 
 #[cfg(feature = "mock-orig-dst")]
-pub const ENV_INBOUND_ORIG_DST_ADDR: &str = "LINKERD2_PROXY_INBOUND_ORIG_DST_ADDR";
+pub const ENV_INBOUND_ORIG_DST_ADDRS: &str = "LINKERD2_PROXY_INBOUND_ORIG_DST_ADDRS";
 
 #[cfg(feature = "mock-orig-dst")]
-pub const ENV_OUTBOUND_ORIG_DST_ADDR: &str = "LINKERD2_PROXY_OUTBOUND_ORIG_DST_ADDR";
+pub const ENV_OUTBOUND_ORIG_DST_ADDRS: &str = "LINKERD2_PROXY_OUTBOUND_ORIG_DST_ADDRS";
 
 pub const ENV_METRICS_RETAIN_IDLE: &str = "LINKERD2_PROXY_METRICS_RETAIN_IDLE";
 
@@ -226,9 +226,9 @@ pub fn parse_config<S: Strings>(strings: &S) -> Result<super::Config, EnvError> 
     let outbound_connect_keepalive = parse(strings, ENV_OUTBOUND_CONNECT_KEEPALIVE, parse_duration);
 
     #[cfg(feature = "mock-orig-dst")]
-    let (inbound_mock_orig_dst, outbound_mock_orig_dst) = (
-        parse(strings, ENV_INBOUND_ORIG_DST_ADDR, parse_socket_addr),
-        parse(strings, ENV_OUTBOUND_ORIG_DST_ADDR, parse_socket_addr),
+    let (inbound_mock_orig_dsts, outbound_mock_orig_dsts) = (
+        parse(strings, ENV_INBOUND_ORIG_DST_ADDRS, parse_socket_addr_list),
+        parse(strings, ENV_OUTBOUND_ORIG_DST_ADDRS, parse_socket_addr_list),
     );
 
     let inbound_disable_ports = parse(
@@ -313,16 +313,16 @@ pub fn parse_config<S: Strings>(strings: &S) -> Result<super::Config, EnvError> 
 
     #[cfg(feature = "mock-orig-dst")]
     let (inbound_orig_dst, outbound_orig_dst) = (
-        inbound_mock_orig_dst?
+        inbound_mock_orig_dsts?
             .map(DefaultOrigDstAddr::from)
             .ok_or_else(|| {
-                error!("{} must be specified", ENV_INBOUND_ORIG_DST_ADDR);
+                error!("{} must be specified", ENV_INBOUND_ORIG_DST_ADDRS);
                 EnvError::NoDestinationAddress
             })?,
-        outbound_mock_orig_dst?
+        outbound_mock_orig_dsts?
             .map(DefaultOrigDstAddr::from)
             .ok_or_else(|| {
-                error!("{} must be specified", ENV_OUTBOUND_ORIG_DST_ADDR);
+                error!("{} must be specified", ENV_OUTBOUND_ORIG_DST_ADDRS);
                 EnvError::NoDestinationAddress
             })?,
     );
@@ -685,6 +685,24 @@ fn parse_socket_addr(s: &str) -> Result<SocketAddr, ParseError> {
             error!("Expected IP:PORT; found: {}", s);
             Err(ParseError::HostIsNotAnIpAddress)
         }
+    }
+}
+
+fn parse_socket_addr_list(s: &str) -> Result<Vec<SocketAddr>, ParseError> {
+    let mut addrs = Vec::new();
+    for p in s.split(',') {
+        match parse_addr(p)? {
+            Addr::Socket(a) => addrs.push(a),
+            _ => {
+                error!("Expected IP:PORT; found: {}", s);
+                return Err(ParseError::HostIsNotAnIpAddress);
+            }
+        }
+    }
+    if addrs.is_empty() {
+        Err(ParseError::HostIsNotAnIpAddress)
+    } else {
+        Ok(addrs)
     }
 }
 

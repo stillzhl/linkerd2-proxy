@@ -36,7 +36,9 @@ where
             Poll::Pending => {
                 self.metrics.not_ready_total.incr();
                 if self.blocked_since.is_none() {
-                    self.blocked_since = Some(Instant::now());
+                    let now = Instant::now();
+                    *self.metrics.blocked_since.lock().unwrap() = Some(now);
+                    self.blocked_since = Some(now);
                 }
                 Poll::Pending
             }
@@ -45,6 +47,7 @@ where
                 if let Some(t0) = self.blocked_since.take() {
                     let not_ready = Instant::now() - t0;
                     self.metrics.poll_millis.add(not_ready.as_millis() as u64);
+                    *self.metrics.blocked_since.lock().unwrap() = None;
                 }
                 Poll::Ready(Ok(()))
             }
@@ -53,6 +56,7 @@ where
                 if let Some(t0) = self.blocked_since.take() {
                     let not_ready = Instant::now() - t0;
                     self.metrics.poll_millis.add(not_ready.as_millis() as u64);
+                    *self.metrics.blocked_since.lock().unwrap() = None;
                 }
                 Poll::Ready(Err(e))
             }

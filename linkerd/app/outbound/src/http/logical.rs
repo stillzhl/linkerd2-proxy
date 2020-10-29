@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use super::{Concrete, Endpoint, Logical};
 use crate::{resolve, stack_labels};
 use linkerd2_app_core::{
@@ -83,7 +85,14 @@ where
         // concrete address.
         .push_map_target(Concrete::from)
         .check_new_service::<(Option<Addr>, Logical), http::Request<_>>()
-        .push(profiles::split::layer())
+        .push_map_target(|l: Logical| {
+            if l.profile.is_some() {
+                (Some(l.addr()), l)
+            } else {
+                (None, l)
+            }
+        })
+        //.push(profiles::split::layer())
         .check_new_service::<Logical, http::Request<_>>()
         // Drives concrete stacks to readiness and makes the split
         // cloneable, as required by the retry middleware.
@@ -95,21 +104,21 @@ where
                 .push(metrics.stack.layer(stack_labels("logical.outer"))),
         )
         .check_new_service::<Logical, http::Request<_>>()
-        .push(profiles::http::route_request::layer(
-            svc::proxies()
-                .push(metrics.http_route_actual.into_layer::<classify::Response>())
-                // Sets an optional retry policy.
-                .push(retry::layer(metrics.http_route_retry))
-                // Sets an optional request timeout.
-                .push(http::MakeTimeoutLayer::default())
-                // Records per-route metrics.
-                .push(metrics.http_route.into_layer::<classify::Response>())
-                // Sets the per-route response classifier as a request
-                // extension.
-                .push(classify::Layer::new())
-                .push_map_target(Logical::into_route)
-                .into_inner(),
-        ))
+        // .push(profiles::http::route_request::layer(
+        //     svc::proxies()
+        //         .push(metrics.http_route_actual.into_layer::<classify::Response>())
+        //         // Sets an optional retry policy.
+        //         .push(retry::layer(metrics.http_route_retry))
+        //         // Sets an optional request timeout.
+        //         .push(http::MakeTimeoutLayer::default())
+        //         // Records per-route metrics.
+        //         .push(metrics.http_route.into_layer::<classify::Response>())
+        //         // Sets the per-route response classifier as a request
+        //         // extension.
+        //         .push(classify::Layer::new())
+        //         .push_map_target(Logical::into_route)
+        //         .into_inner(),
+        // ))
         .check_new_service::<Logical, http::Request<_>>()
         .push(http::header_from_target::layer(CANONICAL_DST_HEADER))
         .push_on_response(

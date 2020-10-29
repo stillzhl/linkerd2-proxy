@@ -171,15 +171,7 @@ impl<P> Endpoint<P> {
     }
 
     pub fn from_logical(reason: tls::ReasonForNoPeerName) -> impl (Fn(Logical<P>) -> Self) + Clone {
-        move |logical| Self {
-            addr: (&logical).into(),
-            metadata: Metadata::default(),
-            identity: tls::PeerIdentity::None(reason),
-            concrete: Concrete {
-                logical,
-                resolve: None,
-            },
-        }
+        move |logical| Self::from_concrete(reason)(Concrete::from((None, logical)))
     }
 
     pub fn from_accept(reason: tls::ReasonForNoPeerName) -> impl (Fn(Accept<P>) -> Self) + Clone {

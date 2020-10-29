@@ -1,4 +1,4 @@
-#![allow(unused_imports)]
+#![allow(unused_imports, unused_variables)]
 
 use super::{Concrete, Endpoint, Logical};
 use crate::{resolve, stack_labels};
@@ -7,7 +7,9 @@ use linkerd2_app_core::{
     config::ProxyConfig,
     metrics, profiles,
     proxy::{api_resolve::Metadata, core::Resolve, http},
-    retry, svc, Addr, Error, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER,
+    retry, svc,
+    transport::tls,
+    Addr, Error, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER,
 };
 use tracing::debug_span;
 
@@ -59,21 +61,25 @@ where
                 .box_http_request(),
         )
         .check_new_service::<Endpoint, http::Request<_>>()
-        .push(resolve::layer(resolve, watchdog))
-        .check_service::<Concrete>()
-        .push_on_response(
-            svc::layers()
-                .push(http::balance::layer(
-                    crate::EWMA_DEFAULT_RTT,
-                    crate::EWMA_DECAY,
-                ))
-                .push(svc::layer::mk(svc::SpawnReady::new))
-                // If the balancer has been empty/unavailable for 10s, eagerly fail
-                // requests.
-                .push_failfast(dispatch_timeout)
-                .push(metrics.stack.layer(stack_labels("concrete"))),
-        )
-        .into_new_service()
+        .push_map_target(Endpoint::from_concrete(
+            tls::ReasonForNoPeerName::NotProvidedByServiceDiscovery,
+        ))
+        .check_new_service::<Concrete, http::Request<_>>()
+        //.push(resolve::layer(resolve, watchdog))
+        //.check_service::<Concrete>()
+        // .push_on_response(
+        //     svc::layers()
+        //         .push(http::balance::layer(
+        //             crate::EWMA_DEFAULT_RTT,
+        //             crate::EWMA_DECAY,
+        //         ))
+        //         .push(svc::layer::mk(svc::SpawnReady::new))
+        //         // If the balancer has been empty/unavailable for 10s, eagerly fail
+        //         // requests.
+        //         .push_failfast(dispatch_timeout)
+        //         .push(metrics.stack.layer(stack_labels("concrete"))),
+        // )
+        //.into_new_service()
         .check_new_service::<Concrete, http::Request<_>>()
         .instrument(|c: &Concrete| match c.resolve.as_ref() {
             None => debug_span!("concrete"),

@@ -29,7 +29,9 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let poll = self.tx.poll_ready(cx).map_err(|_| Closed(()).into());
         if let Poll::Pending = poll {
-            tracing::debug!("Buffer is at capacity!");
+            tracing::debug!("At capacity!");
+        } else {
+            tracing::trace!("ready");
         }
         poll
     }
@@ -40,6 +42,7 @@ where
             .try_send(InFlight { request, tx })
             .ok()
             .expect("poll_ready must be called");
+        tracing::trace!("Issuing request");
         Box::pin(async move { rx.await.map_err(|_| Closed(()))??.await })
     }
 }

@@ -90,7 +90,9 @@ where
         .push_on_response(
             svc::layers()
                 .push_failfast(dispatch_timeout)
-                .push_spawn_buffer(buffer_capacity),
+                .push(metrics.stack.layer(stack_labels("logical.inner")))
+                .push_spawn_buffer(buffer_capacity)
+                .push(metrics.stack.layer(stack_labels("logical.outer"))),
         )
         .check_new_service::<Logical, http::Request<_>>()
         .push(profiles::http::route_request::layer(
@@ -114,8 +116,7 @@ where
             svc::layers()
                 // Strips headers that may be set by this proxy.
                 .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
-                .push(svc::layers().box_http_response())
-                .push(metrics.stack.layer(stack_labels("logical"))),
+                .push(svc::layers().box_http_response()),
         )
         .instrument(|l: &Logical| debug_span!("logical", dst = %l.addr()))
         .check_new_service::<Logical, http::Request<_>>()

@@ -688,6 +688,7 @@ fn parse_socket_addr(s: &str) -> Result<SocketAddr, ParseError> {
     }
 }
 
+#[cfg(feature = "mock-orig-dst")]
 fn parse_socket_addr_list(s: &str) -> Result<Vec<SocketAddr>, ParseError> {
     let mut addrs = Vec::new();
     for p in s.split(',') {

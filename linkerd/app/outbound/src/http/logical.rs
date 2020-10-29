@@ -54,30 +54,31 @@ where
         .check_new_service::<Endpoint, http::Request<http::boxed::Payload>>()
         .push_on_response(
             svc::layers()
-                //.push(svc::layer::mk(svc::SpawnReady::new))
+                .push(svc::layer::mk(svc::SpawnReady::new))
                 .push(metrics.stack.layer(stack_labels("balance.endpoint")))
                 .box_http_request(),
         )
         .check_new_service::<Endpoint, http::Request<_>>()
-        .push_map_target(Endpoint::from_concrete(
-            tls::ReasonForNoPeerName::NotProvidedByServiceDiscovery,
-        ))
-        .check_new_service::<Concrete, http::Request<_>>()
-        //.push(resolve::layer(resolve, watchdog))
-        //.check_service::<Concrete>()
-        // .push_on_response(
-        //     svc::layers()
-        //         .push(http::balance::layer(
-        //             crate::EWMA_DEFAULT_RTT,
-        //             crate::EWMA_DECAY,
-        //         ))
-        //         .push(svc::layer::mk(svc::SpawnReady::new))
-        //         // If the balancer has been empty/unavailable for 10s, eagerly fail
-        //         // requests.
-        //         .push_failfast(dispatch_timeout)
-        //         .push(metrics.stack.layer(stack_labels("concrete"))),
-        // )
-        //.into_new_service()
+        // .push_map_target(Endpoint::from_concrete(
+        //     tls::ReasonForNoPeerName::NotProvidedByServiceDiscovery,
+        // ))
+        // .check_new_service::<Concrete, http::Request<_>>()
+        .push_map_target(Endpoint::from)
+        .push(resolve::layer(resolve, watchdog))
+        .check_service::<Concrete>()
+        .push_on_response(
+            svc::layers()
+                .push(http::balance::layer(
+                    crate::EWMA_DEFAULT_RTT,
+                    crate::EWMA_DECAY,
+                ))
+                .push(svc::layer::mk(svc::SpawnReady::new))
+                // If the balancer has been empty/unavailable for 10s, eagerly fail
+                // requests.
+                .push_failfast(dispatch_timeout)
+                .push(metrics.stack.layer(stack_labels("concrete"))),
+        )
+        .into_new_service()
         .check_new_service::<Concrete, http::Request<_>>()
         .instrument(|c: &Concrete| match c.resolve.as_ref() {
             None => debug_span!("concrete"),
@@ -89,48 +90,48 @@ where
         // concrete address.
         .push_map_target(Concrete::from)
         .check_new_service::<(Option<Addr>, Logical), http::Request<_>>()
-        .push_map_target(|l: Logical| {
-            if l.profile.is_some() {
-                (Some(l.addr()), l)
-            } else {
-                (None, l)
-            }
-        })
-        //.push(profiles::split::layer())
+        // .push_map_target(|l: Logical| {
+        //     if l.profile.is_some() {
+        //         (Some(l.addr()), l)
+        //     } else {
+        //         (None, l)
+        //     }
+        // })
+        .push(profiles::split::layer())
         .check_new_service::<Logical, http::Request<_>>()
         // Drives concrete stacks to readiness and makes the split
         // cloneable, as required by the retry middleware.
-        // .push_on_response(
-        //     svc::layers()
-        //         .push_failfast(dispatch_timeout)
-        //         .push(metrics.stack.layer(stack_labels("logical.inner")))
-        //         .push_spawn_buffer(buffer_capacity)
-        //         .push(metrics.stack.layer(stack_labels("logical.outer"))),
-        // )
-        // .check_new_service::<Logical, http::Request<_>>()
-        // .push(profiles::http::route_request::layer(
-        //     svc::proxies()
-        //         .push(metrics.http_route_actual.into_layer::<classify::Response>())
-        //         // Sets an optional retry policy.
-        //         .push(retry::layer(metrics.http_route_retry))
-        //         // Sets an optional request timeout.
-        //         .push(http::MakeTimeoutLayer::default())
-        //         // Records per-route metrics.
-        //         .push(metrics.http_route.into_layer::<classify::Response>())
-        //         // Sets the per-route response classifier as a request
-        //         // extension.
-        //         .push(classify::Layer::new())
-        //         .push_map_target(Logical::into_route)
-        //         .into_inner(),
-        // ))
+        .push_on_response(
+            svc::layers()
+                .push_failfast(dispatch_timeout)
+                .push(metrics.stack.layer(stack_labels("logical.inner")))
+                .push_spawn_buffer(buffer_capacity)
+                .push(metrics.stack.layer(stack_labels("logical.outer"))),
+        )
         .check_new_service::<Logical, http::Request<_>>()
-        //.push(http::header_from_target::layer(CANONICAL_DST_HEADER))
-        // .push_on_response(
-        //     svc::layers()
-        //         // Strips headers that may be set by this proxy.
-        //         .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
-        //         .box_http_response(),
-        // )
+        .push(profiles::http::route_request::layer(
+            svc::proxies()
+                .push(metrics.http_route_actual.into_layer::<classify::Response>())
+                // Sets an optional retry policy.
+                .push(retry::layer(metrics.http_route_retry))
+                // Sets an optional request timeout.
+                .push(http::MakeTimeoutLayer::default())
+                // Records per-route metrics.
+                .push(metrics.http_route.into_layer::<classify::Response>())
+                // Sets the per-route response classifier as a request
+                // extension.
+                .push(classify::Layer::new())
+                .push_map_target(Logical::into_route)
+                .into_inner(),
+        ))
+        .check_new_service::<Logical, http::Request<_>>()
+        .push(http::header_from_target::layer(CANONICAL_DST_HEADER))
+        .push_on_response(
+            svc::layers()
+                // Strips headers that may be set by this proxy.
+                .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
+                .box_http_response(),
+        )
         .instrument(|l: &Logical| debug_span!("logical", dst = %l.addr()))
         .check_new_service::<Logical, http::Request<_>>()
         .into_inner()

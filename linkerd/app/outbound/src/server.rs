@@ -70,17 +70,17 @@ where
             svc::layers()
                 .box_http_request()
                 // Limits the number of in-flight requests.
-                // .push_concurrency_limit(max_in_flight_requests)
+                .push_concurrency_limit(max_in_flight_requests)
                 // Eagerly fail requests when the proxy is out of capacity for a
                 // dispatch_timeout.
-                // .push_failfast(dispatch_timeout)
-                // .push(metrics.http_errors.clone())
+                .push_failfast(dispatch_timeout)
+                .push(metrics.http_errors.clone())
                 // Synthesizes responses for proxy errors.
                 .push(errors::layer())
                 // Initiates OpenCensus tracing.
-                // .push(TraceContext::layer(span_sink.clone().map(|span_sink| {
-                //     SpanConverter::server(span_sink, trace_labels())
-                // })))
+                .push(TraceContext::layer(span_sink.clone().map(|span_sink| {
+                    SpanConverter::server(span_sink, trace_labels())
+                })))
                 .push(metrics.stack.layer(stack_labels("source")))
                 .push_failfast(dispatch_timeout)
                 .push_spawn_buffer(buffer_capacity)
@@ -135,21 +135,21 @@ where
 
     svc::stack(svc::stack::MakeSwitch::new(SkipByProfile, http, tcp))
         .check_new_service::<tcp::Logical, transport::metrics::SensorIo<I>>()
-        .push_map_target(|a| tcp::Logical::from((None, a)))
-        // .push_map_target(tcp::Logical::from)
-        // .push(profiles::discover::layer(
-        //     profiles,
-        //     AllowProfile(config.allow_discovery.clone().into()),
-        // ))
-        // .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
-        // .cache(
-        //     svc::layers().push_on_response(
-        //         svc::layers()
-        //             .push_failfast(dispatch_timeout)
-        //             .push(metrics.stack.layer(stack_labels("accept.inner")))
-        //             .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age),
-        //     ),
-        // )
+        // .push_map_target(|a| tcp::Logical::from((None, a)))
+        .push_map_target(tcp::Logical::from)
+        .push(profiles::discover::layer(
+            profiles,
+            AllowProfile(config.allow_discovery.clone().into()),
+        ))
+        .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
+        .cache(
+            svc::layers().push_on_response(
+                svc::layers()
+                    .push_failfast(dispatch_timeout)
+                    .push(metrics.stack.layer(stack_labels("accept.inner")))
+                    .push_spawn_buffer_with_idle_timeout(buffer_capacity, cache_max_idle_age),
+            ),
+        )
         .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
         .push(metrics.transport.layer_accept())
         .push_map_target(tcp::Accept::from)

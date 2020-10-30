@@ -14,5 +14,4 @@ export LINKERD2_PROXY_TAP_DISABLED=1
 export LINKERD2_PROXY_IDENTITY_DISABLED=1
 export LINKERD2_PROXY_CPUS=5
 
-#heaptrack target/release/linkerd2-proxy
-target/release/linkerd2-proxy
+heaptrack target/release/linkerd2-proxy

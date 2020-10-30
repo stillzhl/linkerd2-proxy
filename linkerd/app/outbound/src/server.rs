@@ -69,11 +69,12 @@ where
         .push_on_response(
             svc::layers()
                 .box_http_request()
-                // Limits the number of in-flight requests.
-                .push_concurrency_limit(max_in_flight_requests)
                 // Eagerly fail requests when the proxy is out of capacity for a
                 // dispatch_timeout.
                 .push_failfast(dispatch_timeout)
+                .push_spawn_buffer(buffer_capacity)
+                // Limits the number of in-flight requests.
+                .push_concurrency_limit(max_in_flight_requests)
                 .push(metrics.http_errors.clone())
                 // Synthesizes responses for proxy errors.
                 .push(errors::layer())
@@ -82,8 +83,6 @@ where
                     SpanConverter::server(span_sink, trace_labels())
                 })))
                 .push(metrics.stack.layer(stack_labels("source")))
-                .push_failfast(dispatch_timeout)
-                .push_spawn_buffer(buffer_capacity)
                 .box_http_response(),
         )
         .check_new_service::<http::Logical, http::Request<_>>()

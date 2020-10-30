@@ -285,7 +285,10 @@ mod sys {
 #[cfg(feature = "mock-orig-dst")]
 mod mock {
     use super::{OrigDstAddr, SocketAddr, TcpStream};
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     #[derive(Clone, Debug)]
     pub struct MockOrigDstAddr(Arc<Inner>);

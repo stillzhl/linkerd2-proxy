@@ -56,20 +56,20 @@ RUN --mount=type=cache,target=target \
 ## Install the proxy binary into the base runtime image.
 FROM $RUNTIME_IMAGE as runtime
 
-RUN --mount=type=cache,target=/var/lib/apt/lists \
-  --mount=type=cache,target=/var/tmp \
-  apt update && apt install -y heaptrack
-
 # When set, causes the proxy to remove the identity wrapper responsible for
 # CSR and key generation.
 ARG SKIP_IDENTITY_WRAPPER
 
+RUN --mount=type=cache,target=/var/lib/apt/lists \
+  --mount=type=cache,target=/var/tmp \
+  apt update && apt install -y heaptrack
+
 WORKDIR /linkerd
-COPY --from=build /out/linkerd2-proxy /usr/lib/linkerd/linkerd2-proxy
+COPY --from=build /out/linkerd2-proxy /usr/lib/linkerd/linkerd2-proxy.bin
+COPY ./heaptrack-proxy.sh /usr/lib/linkerd/linkerd2-proxy
 ENV LINKERD2_PROXY_LOG=warn,linkerd=info
 RUN if [ -n "$SKIP_IDENTITY_WRAPPER" ] ; then \
   rm -f /usr/bin/linkerd2-proxy-run && \
   ln /usr/lib/linkerd/linkerd2-proxy /usr/bin/linkerd2-proxy-run ; \
   fi
 # Inherits the ENTRYPOINT from the runtime image.
-ENTRYPOINT ["/usr/bin/heaptrack", "/usr/bin/linkerd2-proxy-run"]

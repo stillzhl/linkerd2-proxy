@@ -16,10 +16,10 @@ jobs:
             strip: strip
           - architecture: arm64
             target: aarch64-unknown-linux-musl
-            strip: aarch64-linux-gnu-strip
+            strip: aarch64-linux-musl-strip
           - architecture: arm
             target: armv7-unknown-linux-musleabihf
-            strip: arm-linux-gnueabihf-strip
+            strip: arm-linux-musleabihf-strip
     name: Package (${{ matrix.architecture }})
     runs-on: ubuntu-latest
     steps:

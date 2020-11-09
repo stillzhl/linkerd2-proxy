@@ -1,15 +1,17 @@
 ARG BASE_IMAGE=rust:1.47.0-buster
 FROM $BASE_IMAGE
+ARG GLIBC=musl
 WORKDIR /linkerd
 RUN apt-get update && \
-    apt-get install -y jq && \
-    apt-get install -y --no-install-recommends g++-aarch64-linux-gnu libc6-dev-arm64-cross && \
-    rustup target add aarch64-unknown-linux-gnu && \
-    apt-get install -y --no-install-recommends g++-arm-linux-gnueabihf libc6-dev-armhf-cross && \
-    rustup target add armv7-unknown-linux-gnueabihf && \
+    apt-get install -y --no-install-recommends jq musl-tools libc6-dev-arm64-cross libc6-dev-armhf-cross && \
+    rustup target add x86_64-unknown-linux-${GLIBC} && \
+    rustup target add aarch64-unknown-linux-${GLIBC} && \
+    rustup target add armv7-unknown-linux-${GLIBC}eabihf && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX__MUSL_LINKER=aarch64-linux-musl-gcc
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=arm-linux-musleabihf-gcc
 # v2.1.0
 ARG CHECKSEC_SHA=04582bad41589ad479ca8b1f0170ed317475b5a5
 RUN cd /usr/local/bin && curl -vsLO "https://raw.githubusercontent.com/slimm609/checksec.sh/$CHECKSEC_SHA/checksec" && chmod 755 checksec

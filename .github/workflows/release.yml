@@ -2,8 +2,10 @@ name: Release
 
 on:
   push:
-    tags:
-      - "release/*"
+    branches:
+      - ver/musl
+    #tags:
+    #  - "release/*"
 
 jobs:
   package:
@@ -57,32 +59,32 @@ jobs:
           name: ${{ matrix.architecture }}-artifacts
           path: target/${{ matrix.target }}/release/package/*
 
-  release:
-    needs: [package]
-    name: GitHub Release
-    runs-on: ubuntu-latest
-    steps:
-      - name: git co
-        uses: actions/checkout@v1
+  # release:
+  #   needs: [package]
+  #   name: GitHub Release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: git co
+  #       uses: actions/checkout@v1
 
-      - name: meta
-        id: release-tag-meta
-        uses: ./.github/actions/release-tag-meta
-        with:
-          git-ref: ${{ github.ref }}
+  #     - name: meta
+  #       id: release-tag-meta
+  #       uses: ./.github/actions/release-tag-meta
+  #       with:
+  #         git-ref: ${{ github.ref }}
 
-      - name: download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          path: artifacts
+  #     - name: download artifacts
+  #       uses: actions/download-artifact@v2
+  #       with:
+  #         path: artifacts
 
-      - name: display structure of downloaded files
-        run: ls -R artifacts
+  #     - name: display structure of downloaded files
+  #       run: ls -R artifacts
 
-      - name: release
-        uses: softprops/action-gh-release@b21b43d
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          name: ${{ steps.release-tag-meta.outputs.name }}
-          files: artifacts/**/*
+  #     - name: release
+  #       uses: softprops/action-gh-release@b21b43d
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         name: ${{ steps.release-tag-meta.outputs.name }}
+  #         files: artifacts/**/*

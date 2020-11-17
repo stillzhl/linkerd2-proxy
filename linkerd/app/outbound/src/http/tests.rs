@@ -108,7 +108,7 @@ async fn profile_endpoint_propagates_conn_errors() {
         ([127, 0, 0, 1], 666).into(),
         Some(ep1),
     ));
-  
+
     let (client_io, proxy_io) = support::io::duplex(4096);
     let client = tokio::spawn(async move {
         let (mut req, conn) = hyper::client::conn::Builder::new()

@@ -28,7 +28,7 @@ linkerd2-metrics = { path = "../../metrics" }
 linkerd2-stack = { path = "../../stack" }
 rustls = "0.18"
 tokio = { version = "0.3", features = ["net", "io-util"]}
-tokio-rustls = "0.20"
+tokio-rustls = "0.21"
 tracing = "0.1.22"
 webpki = "0.21"
 untrusted = "0.7"

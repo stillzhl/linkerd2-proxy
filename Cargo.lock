@@ -2658,7 +2658,8 @@ dependencies = [
 [[package]]
 name = "tokio-rustls"
 version = "0.20.0"
-source = "git+https://github.com/tokio-rs/tls?rev=e6ef54641b911cfcf23b77a8c4826ae0f8e9870e#e6ef54641b911cfcf23b77a8c4826ae0f8e9870e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ba3f045b4a15afc543ffe6e02bae7ecf372e89a0f9f8c4b15b13f0ceed4f105"
 dependencies = [
  "rustls",
  "tokio 0.3.5",
@@ -3186,3 +3187,8 @@ name = "wyz"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85e60b0d1b5f99db2556934e21937020776a5d31520bf169e851ac44e6420214"
+
+[[patch.unused]]
+name = "tokio-rustls"
+version = "0.21.0"
+source = "git+https://github.com/tokio-rs/tls?branch=eliza/writev#3bdd3d7102ebb288279137cb642f63a5d3bac0e6"

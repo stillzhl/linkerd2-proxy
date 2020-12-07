@@ -2335,8 +2335,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "064fd21ff87c6e87ed4506e68beb42459caa4a0e2eb144932e6776768556980b"
+source = "git+https://github.com/hawkw/rustls?branch=eliza/vectored-write-without-vector#16587b7ae5d0954339ca75bf9f37889307894b38"
 dependencies = [
  "base64 0.13.0",
  "log",
@@ -3115,8 +3114,8 @@ dependencies = [
 
 [[package]]
 name = "webpki"
-version = "0.21.3"
-source = "git+https://github.com/linkerd/webpki?branch=cert-dns-names-0.21#b2c3bb3633f97280ae0503a79b501d51137dcb10"
+version = "0.21.4"
+source = "git+https://github.com/hawkw/webpki?branch=eliza/bump-version#6312d221ad458fd11a223ce51b758717088a7882"
 dependencies = [
  "ring",
  "untrusted",

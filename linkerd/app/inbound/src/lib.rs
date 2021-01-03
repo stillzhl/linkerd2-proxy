@@ -24,7 +24,7 @@ use linkerd2_app_core::{
     reconnect,
     spans::SpanConverter,
     svc,
-    transport::{self, io, listen, tls, NewDetectService},
+    transport::{self, io, listen, metrics::SensorIo, tls, NewDetectService},
     Error, NameAddr, NameMatch, TraceContext, DST_OVERRIDE_HEADER,
 };
 use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
@@ -72,12 +72,13 @@ pub fn tcp_connect<T: Into<u16>>(
 
 #[allow(clippy::too_many_arguments)]
 impl Config {
-    pub fn build<I, C, L, LSvc, P>(
+    pub fn build<I, P, C, H, HSvc, T, TSvc>(
         self,
         listen_addr: SocketAddr,
         local_identity: tls::Conditional<identity::Local>,
         connect: C,
-        http_loopback: L,
+        http_gateway: H,
+        tcp_gateway: Option<T>,
         profiles_client: P,
         tap_layer: tap::Layer,
         metrics: metrics::Proxy,
@@ -100,13 +101,25 @@ impl Config {
         C::Response: io::AsyncRead + io::AsyncWrite + Send + Unpin + 'static,
         C::Error: Into<Error>,
         C::Future: Send + Unpin,
-        L: svc::NewService<Target, Service = LSvc> + Clone + Send + Sync + Unpin + 'static,
-        LSvc: svc::Service<http::Request<http::BoxBody>, Response = http::Response<http::BoxBody>>
+        H: svc::NewService<Target, Service = HSvc> + Clone + Send + Sync + Unpin + 'static,
+        HSvc: svc::Service<http::Request<http::BoxBody>, Response = http::Response<http::BoxBody>>
             + Send
             + Unpin
             + 'static,
-        LSvc::Error: Into<Error>,
-        LSvc::Future: Send,
+        HSvc::Error: Into<Error>,
+        HSvc::Future: Send,
+        T: svc::NewService<(opaque_transport::Header, TcpAccept), Service = TSvc>
+            + Clone
+            + Send
+            + Sync
+            + Unpin
+            + 'static,
+        TSvc: svc::Service<io::PrefixedIo<SensorIo<tls::accept::Io<I>>>, Response = ()>
+            + Send
+            + Unpin
+            + 'static,
+        TSvc::Error: Into<Error>,
+        TSvc::Future: Send,
         P: profiles::GetProfile<NameAddr> + Clone + Send + Sync + 'static,
         P::Error: Send,
         P::Future: Send,
@@ -130,7 +143,7 @@ impl Config {
         // through the provided `http_loopback` service.
         let direct = {
             // Route non-opaque HTTP requests through the provided service.
-            let http = svc::stack(http_loopback)
+            let http = svc::stack(http_gateway)
                 .push(svc::NewRouter::layer(RequestTarget::from))
                 .push_on_response(
                     svc::layers()
@@ -151,10 +164,9 @@ impl Config {
 
             // If there was an opaque transport header, use it to determine the
             // local endpoint and forward the connection.
-            //
-            // TODO Instrument TCP gateway here.
             svc::stack(tcp_forward.clone())
                 .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
+                .push(svc::stack::NewOptional::layer(tcp_gateway))
                 .push(svc::NewUnwrapOr::layer(
                     // If there's no opaque transport header, try to detect
                     // HTTP. If that can't be done, fail the connection as if it

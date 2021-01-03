@@ -230,6 +230,7 @@ impl Config {
                         svc::stack(http_gateway)
                             .push_on_response(http::BoxRequest::layer())
                             .into_inner(),
+                        None as Option<svc::Fail<(), String>>, // TODO tcp gateway
                         dst.profiles,
                         tap_layer,
                         inbound_metrics,

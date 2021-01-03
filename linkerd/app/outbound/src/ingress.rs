@@ -116,7 +116,7 @@ where
         .push_map_target(http::Accept::from)
         .check_new_service::<(http::Version, tcp::Accept), http::Request<_>>()
         .push(http::NewServeHttp::layer(h2_settings, drain))
-        .push(svc::stack::NewUnwrap::layer(tcp))
+        .push(svc::stack::NewUnwrapOr::layer(tcp))
         .push_cache(cache_max_idle_age)
         .push(NewDetectService::layer(
             detect_protocol_timeout,

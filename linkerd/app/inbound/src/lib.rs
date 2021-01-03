@@ -155,12 +155,12 @@ impl Config {
             // TODO Instrument TCP gateway here.
             svc::stack(tcp_forward.clone())
                 .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
-                .push(svc::NewUnwrap::layer(
+                .push(svc::NewUnwrapOr::layer(
                     // If there's no opaque transport header, try to detect
                     // HTTP. If that can't be done, fail the connection as if it
                     // were refused.
                     svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
-                        .push(svc::NewUnwrap::layer(
+                        .push(svc::NewUnwrapOr::layer(
                             svc::Fail::<_, RefuseNonOpaque>::default(),
                         ))
                         .push(NewDetectService::layer(
@@ -190,7 +190,7 @@ impl Config {
         svc::stack(http)
             .check_new::<(http::Version, TcpAccept)>()
             .push_cache(self.proxy.cache_max_idle_age)
-            .push(svc::NewUnwrap::layer(
+            .push(svc::NewUnwrapOr::layer(
                 svc::stack(tcp_forward.clone())
                     .push_map_target(TcpEndpoint::from)
                     .check_new::<TcpAccept>()

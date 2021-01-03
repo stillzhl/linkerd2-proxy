@@ -3,14 +3,14 @@ use crate::{layer, Either, NewService};
 /// A stack middleware that takes an optional target type and builds an `A`-typed
 /// stack if the target is set and a `B`-typed stack if it is not.
 #[derive(Clone, Debug, Default)]
-pub struct NewOptional<A, B> {
+pub struct NewUnwrap<A, B> {
     new_some: A,
     new_none: B,
 }
 
-// === impl NewOptional ===
+// === impl NewUnwrap ===
 
-impl<A, B> NewOptional<A, B> {
+impl<A, B> NewUnwrap<A, B> {
     pub fn new(new_some: A, new_none: B) -> Self {
         Self { new_some, new_none }
     }
@@ -23,7 +23,7 @@ impl<A, B> NewOptional<A, B> {
     }
 }
 
-impl<T, U, A, B> NewService<(Option<T>, U)> for NewOptional<A, B>
+impl<T, U, A, B> NewService<(Option<T>, U)> for NewUnwrap<A, B>
 where
     A: NewService<(T, U)> + Clone,
     B: NewService<U> + Clone,

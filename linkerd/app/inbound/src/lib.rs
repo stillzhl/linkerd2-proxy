@@ -155,7 +155,7 @@ impl Config {
             let refuse = svc::Fail::<(), RefuseNonOpaque>::default();
             let non_opaque =
                 svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
-                    .push(svc::stack::NewOptional::layer(refuse))
+                    .push(svc::stack::NewUnwrap::layer(refuse))
                     .push(transport::NewDetectService::layer(
                         transport::detect::DetectTimeout::new(
                             self.proxy.detect_protocol_timeout,
@@ -166,7 +166,7 @@ impl Config {
 
             svc::stack(tcp_forward.clone())
                 .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
-                .push(svc::stack::NewOptional::layer(non_opaque))
+                .push(svc::stack::NewUnwrap::layer(non_opaque))
                 .push(transport::NewDetectService::layer(
                     transport::detect::DetectTimeout::new(
                         self.proxy.detect_protocol_timeout,
@@ -190,7 +190,7 @@ impl Config {
         svc::stack(http)
             .check_new::<(http::Version, TcpAccept)>()
             .push_cache(self.proxy.cache_max_idle_age)
-            .push(svc::stack::NewOptional::layer(
+            .push(svc::stack::NewUnwrap::layer(
                 svc::stack(tcp_forward.clone())
                     .push_map_target(TcpEndpoint::from)
                     .check_new::<TcpAccept>()

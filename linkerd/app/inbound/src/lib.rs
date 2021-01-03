@@ -24,7 +24,7 @@ use linkerd2_app_core::{
     reconnect,
     spans::SpanConverter,
     svc,
-    transport::{self, io, listen, tls},
+    transport::{self, detect::DetectTimeout, io, listen, tls, NewDetectService},
     Error, NameAddr, NameMatch, TraceContext, DST_OVERRIDE_HEADER,
 };
 use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
@@ -149,30 +149,28 @@ impl Config {
                 )
                 .into_inner();
 
-            // If there's no opaque transport header, try to detect
-            // HTTP. If that can't be done, fail the connection as if it
-            // were refused.
-            let refuse = svc::Fail::<(), RefuseNonOpaque>::default();
-            let non_opaque =
-                svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
-                    .push(svc::stack::NewUnwrap::layer(refuse))
-                    .push(transport::NewDetectService::layer(
-                        transport::detect::DetectTimeout::new(
-                            self.proxy.detect_protocol_timeout,
-                            http::DetectHttp::default(),
-                        ),
-                    ))
-                    .into_inner();
-
+            // If there was an opaque transport header, use it to determine the
+            // local endpoint and forward the connection.
             svc::stack(tcp_forward.clone())
                 .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
-                .push(svc::stack::NewUnwrap::layer(non_opaque))
-                .push(transport::NewDetectService::layer(
-                    transport::detect::DetectTimeout::new(
-                        self.proxy.detect_protocol_timeout,
-                        opaque_transport::DetectHeader::default(),
-                    ),
+                .push(svc::NewUnwrap::layer(
+                    // If there's no opaque transport header, try to detect
+                    // HTTP. If that can't be done, fail the connection as if it
+                    // were refused.
+                    svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
+                        .push(svc::NewUnwrap::layer(
+                            svc::Fail::<_, RefuseNonOpaque>::default(),
+                        ))
+                        .push(NewDetectService::layer(DetectTimeout::new(
+                            self.proxy.detect_protocol_timeout,
+                            http::DetectHttp::default(),
+                        )))
+                        .into_inner(),
                 ))
+                .push(NewDetectService::layer(DetectTimeout::new(
+                    self.proxy.detect_protocol_timeout,
+                    opaque_transport::DetectHeader::default(),
+                )))
                 .into_inner()
         };
 
@@ -190,18 +188,16 @@ impl Config {
         svc::stack(http)
             .check_new::<(http::Version, TcpAccept)>()
             .push_cache(self.proxy.cache_max_idle_age)
-            .push(svc::stack::NewUnwrap::layer(
+            .push(svc::NewUnwrap::layer(
                 svc::stack(tcp_forward.clone())
                     .push_map_target(TcpEndpoint::from)
                     .check_new::<TcpAccept>()
                     .into_inner(),
             ))
-            .push(transport::NewDetectService::layer(
-                transport::detect::DetectTimeout::new(
-                    self.proxy.detect_protocol_timeout,
-                    http::DetectHttp::default(),
-                ),
-            ))
+            .push(NewDetectService::layer(DetectTimeout::new(
+                self.proxy.detect_protocol_timeout,
+                http::DetectHttp::default(),
+            )))
             // If the connection targets the inbound port, use the direct stack.
             .push_switch(prevent_loop, direct)
             .push_request_filter(self.require_identity_for_inbound_ports)

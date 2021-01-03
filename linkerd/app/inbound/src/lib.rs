@@ -49,7 +49,7 @@ pub struct Config {
 pub struct SkipByPort(std::sync::Arc<indexmap::IndexSet<u16>>);
 
 #[derive(Default)]
-struct Refused(());
+struct RefuseNonOpaque(());
 
 // === impl Config ===
 
@@ -125,47 +125,54 @@ impl Config {
             .instrument(|_: &_| debug_span!("tcp"))
             .into_inner();
 
+        // Handle connections that target the inbound server port by (1)
+        // detecting an opaque transort header or (2) routing HTTP requests
+        // through the provided `http_loopback` service.
         let direct = {
-            let gateway = svc::stack(http_loopback)
+            // Route non-opaque HTTP requests through the provided service.
+            let http = svc::stack(http_loopback)
                 .push(svc::NewRouter::layer(RequestTarget::from))
                 .push_on_response(
                     svc::layers()
                         .push(svc::FailFast::layer(
-                            "HTTP Gateway",
+                            "HTTP Direct",
                             self.proxy.dispatch_timeout,
                         ))
                         .push_spawn_buffer(self.proxy.buffer_capacity)
-                        .push(metrics.stack.layer(stack_labels("http", "gateway"))),
+                        .push(metrics.stack.layer(stack_labels("http", "direct"))),
+                )
+                .push_cache(self.proxy.cache_max_idle_age)
+                .push_on_response(
+                    svc::layers()
+                        .push(http::Retain::layer())
+                        .push(http::BoxResponse::layer()),
                 )
                 .into_inner();
 
-            svc::stack(tcp_forward.clone())
-                .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
-                .push(svc::stack::NewOptional::layer(
-                    svc::stack(self.http_server(
-                        gateway,
-                        &metrics,
-                        span_sink.clone(),
-                        drain.clone(),
-                    ))
-                    .push(svc::stack::NewOptional::layer(
-                        svc::Fail::<(), Refused>::default(),
-                    ))
+            // If there's no opaque transport header, try to detect
+            // HTTP. If that can't be done, fail the connection as if it
+            // were refused.
+            let refuse = svc::Fail::<(), RefuseNonOpaque>::default();
+            let non_opaque =
+                svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
+                    .push(svc::stack::NewOptional::layer(refuse))
                     .push(transport::NewDetectService::layer(
                         transport::detect::DetectTimeout::new(
                             self.proxy.detect_protocol_timeout,
                             http::DetectHttp::default(),
                         ),
                     ))
-                    .into_inner(),
-                ))
+                    .into_inner();
+
+            svc::stack(tcp_forward.clone())
+                .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
+                .push(svc::stack::NewOptional::layer(non_opaque))
                 .push(transport::NewDetectService::layer(
                     transport::detect::DetectTimeout::new(
                         self.proxy.detect_protocol_timeout,
                         opaque_transport::DetectHeader::default(),
                     ),
                 ))
-                .check_new::<TcpAccept>()
                 .into_inner()
         };
 
@@ -417,10 +424,13 @@ impl svc::stack::Switch<listen::Addrs> for SkipByPort {
     }
 }
 
-// === impl Refused ===
+// === impl RefuseNonOpaque ===
 
-impl Into<Error> for Refused {
+impl Into<Error> for RefuseNonOpaque {
     fn into(self) -> Error {
-        io::Error::from(io::ErrorKind::ConnectionRefused).into()
+        Error::from(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "Non-opaque connection refused",
+        ))
     }
 }

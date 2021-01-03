@@ -10,20 +10,23 @@ pub struct NewUnwrapOr<A, B> {
 
 // === impl NewUnwrapOr ===
 
-impl<A, B: Clone> NewUnwrapOr<A, B> {
+impl<A, B> NewUnwrapOr<A, B> {
     pub fn new(new_some: A, new_none: B) -> Self {
         Self { new_some, new_none }
     }
 
-    pub fn layer(new_none: B) -> impl layer::Layer<A, Service = Self> {
+    pub fn layer(new_none: B) -> impl layer::Layer<A, Service = Self>
+    where
+        B: Clone,
+    {
         layer::mk(move |new_some| Self::new(new_some, new_none.clone()))
     }
 }
 
 impl<T, U, A, B> NewService<(Option<T>, U)> for NewUnwrapOr<A, B>
 where
-    A: NewService<(T, U)> + Clone,
-    B: NewService<U> + Clone,
+    A: NewService<(T, U)>,
+    B: NewService<U>,
 {
     type Service = Either<A::Service, B::Service>;
 

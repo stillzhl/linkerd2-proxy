@@ -13,7 +13,7 @@ use self::prevent_loop::PreventLoop;
 use self::require_identity_for_ports::RequireIdentityForPorts;
 use linkerd2_app_core::{
     classify,
-    config::{ConnectConfig, ProxyConfig, ServerConfig},
+    config::{ConnectConfig, ProxyConfig},
     drain, dst, errors, metrics, opaque_transport,
     opencensus::proto::trace::v1 as oc,
     profiles,
@@ -50,8 +50,6 @@ pub struct SkipByPort(std::sync::Arc<indexmap::IndexSet<u16>>);
 
 #[derive(Default)]
 struct Refused(());
-
-type SensorIo<T> = io::SensorIo<T, transport::metrics::Sensor>;
 
 // === impl Config ===
 
@@ -113,18 +111,9 @@ impl Config {
         P::Future: Send,
     {
         let prevent_loop = PreventLoop::from(listen_addr.port());
-        let http_router = self.build_http_router(
-            connect.clone(),
-            prevent_loop,
-            http_loopback,
-            profiles_client,
-            tap_layer,
-            metrics.clone(),
-            span_sink.clone(),
-        );
 
         // Forwards TCP streams that cannot be decoded as HTTP.
-        let tcp_forward = svc::stack(connect)
+        let tcp_forward = svc::stack(connect.clone())
             .push(metrics.transport.layer_connect())
             .push_make_thunk()
             .push_on_response(
@@ -135,19 +124,71 @@ impl Config {
             .instrument(|_: &_| debug_span!("tcp"))
             .into_inner();
 
-        let accept = self.build_accept(
-            prevent_loop,
-            tcp_forward.clone(),
-            http_router,
-            metrics.clone(),
-            span_sink,
-            drain,
-        );
+        // When HTTP detection fails, forward the connection to the application
+        // as an opaque TCP stream.
+        let serve_tcp = svc::stack(tcp_forward.clone())
+            .push_map_target(TcpEndpoint::from)
+            .push_switch(
+                prevent_loop,
+                // If the connection targets the inbound port, try to detect an
+                // opaque transport header and rewrite the target port
+                // accordingly. If there was no opaque transport header, fail
+                // the connection with a ConnectionRefused error.
+                svc::stack(tcp_forward.clone())
+                    .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
+                    .push(svc::stack::NewOptional::layer(
+                        svc::Fail::<_, Refused>::default(),
+                    ))
+                    .push(transport::NewDetectService::layer(
+                        transport::detect::DetectTimeout::new(
+                            self.proxy.detect_protocol_timeout,
+                            opaque_transport::DetectHeader::default(),
+                        ),
+                    )),
+            )
+            .into_inner();
 
-        self.build_tls_accept(accept, tcp_forward, local_identity, metrics)
+        let http = {
+            let router = self.build_http_router(
+                connect,
+                prevent_loop,
+                http_loopback,
+                profiles_client,
+                tap_layer,
+                metrics.clone(),
+                span_sink.clone(),
+            );
+            self.build_http_server(router, metrics.clone(), span_sink, drain)
+        };
+
+        svc::stack(http)
+            .push(svc::stack::NewOptional::layer(serve_tcp))
+            .push_cache(self.proxy.cache_max_idle_age)
+            .push(transport::NewDetectService::layer(
+                transport::detect::DetectTimeout::new(
+                    self.proxy.detect_protocol_timeout,
+                    http::DetectHttp::default(),
+                ),
+            ))
+            .push_request_filter(self.require_identity_for_inbound_ports)
+            .push(metrics.transport.layer_accept())
+            .push_map_target(TcpAccept::from)
+            .push(tls::NewDetectTls::layer(
+                local_identity,
+                self.proxy.detect_protocol_timeout,
+            ))
+            .push_switch(
+                self.disable_protocol_detection_for_ports,
+                svc::stack(tcp_forward)
+                    .push_map_target(TcpEndpoint::from)
+                    .push(metrics.transport.layer_accept())
+                    .push_map_target(TcpAccept::from)
+                    .into_inner(),
+            )
+            .into_inner()
     }
 
-    pub fn build_http_router<C, P, L, LSvc>(
+    pub fn build_http_router<T, C, P, L, LSvc>(
         &self,
         connect: C,
         prevent_loop: impl Into<PreventLoop>,
@@ -157,7 +198,7 @@ impl Config {
         metrics: metrics::Proxy,
         span_sink: Option<mpsc::Sender<oc::Span>>,
     ) -> impl svc::NewService<
-        Target,
+        T,
         Service = impl svc::Service<
             http::Request<http::BoxBody>,
             Response = http::Response<http::BoxBody>,
@@ -166,6 +207,7 @@ impl Config {
         > + Clone,
     > + Clone
     where
+        RequestTarget: From<T>,
         C: svc::Service<TcpEndpoint> + Clone + Send + Sync + Unpin + 'static,
         C::Response: io::AsyncRead + io::AsyncWrite + Send + Unpin + 'static,
         C::Error: Into<Error>,
@@ -264,76 +306,6 @@ impl Config {
             // having enormous types.
             .push(svc::BoxNewService::layer())
             .check_new_service::<Target, http::Request<http::BoxBody>>()
-            .into_inner()
-    }
-
-    pub fn build_accept<I, F, FSvc, H, HSvc>(
-        &self,
-        prevent_loop: impl Into<PreventLoop>,
-        tcp_forward: F,
-        http_router: H,
-        metrics: metrics::Proxy,
-        span_sink: Option<mpsc::Sender<oc::Span>>,
-        drain: drain::Watch,
-    ) -> impl svc::NewService<
-        TcpAccept,
-        Service = impl svc::Service<I, Response = (), Error = Error, Future = impl Send>,
-    > + Clone
-    where
-        I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Send + Unpin + 'static,
-        F: svc::NewService<TcpEndpoint, Service = FSvc> + Clone + Send + Sync + 'static,
-        FSvc: svc::Service<io::PrefixedIo<I>, Response = ()>
-            + svc::Service<io::PrefixedIo<io::PrefixedIo<I>>, Response = ()>
-            + Clone
-            + Send
-            + Sync
-            + 'static,
-        <FSvc as svc::Service<io::PrefixedIo<I>>>::Error: Into<Error>,
-        <FSvc as svc::Service<io::PrefixedIo<I>>>::Future: Send,
-        <FSvc as svc::Service<io::PrefixedIo<io::PrefixedIo<I>>>>::Error: Into<Error>,
-        <FSvc as svc::Service<io::PrefixedIo<io::PrefixedIo<I>>>>::Future: Send,
-        H: svc::NewService<Target, Service = HSvc> + Clone + Send + Sync + Unpin + 'static,
-        HSvc: svc::Service<http::Request<http::BoxBody>, Response = http::Response<http::BoxBody>>
-            + Clone
-            + Send
-            + 'static,
-        HSvc::Error: Into<Error>,
-        HSvc::Future: Send,
-    {
-        let ProxyConfig {
-            server: ServerConfig { h2_settings, .. },
-            dispatch_timeout,
-            max_in_flight_requests,
-            detect_protocol_timeout,
-            cache_max_idle_age,
-            ..
-        } = self.proxy.clone();
-
-        // When HTTP detection fails, forward the connection to the application
-        // as an opaque TCP stream.
-        let tcp = svc::stack(tcp_forward.clone())
-            .push_map_target(TcpEndpoint::from)
-            .push_switch(
-                prevent_loop.into(),
-                // If the connection targets the inbound port, try to detect an
-                // opaque transport header and rewrite the target port
-                // accordingly. If there was no opaque transport header, fail
-                // the connection with a ConnectionRefused error.
-                svc::stack(tcp_forward)
-                    .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
-                    .push(svc::stack::NewOptional::layer(
-                        svc::Fail::<_, Refused>::default(),
-                    ))
-                    .push(transport::NewDetectService::layer(
-                        transport::detect::DetectTimeout::new(
-                            self.proxy.detect_protocol_timeout,
-                            opaque_transport::DetectHeader::default(),
-                        ),
-                    )),
-            )
-            .into_inner();
-
-        svc::stack(http_router)
             // Removes the override header after it has been used to
             // determine a reuquest target.
             .push_on_response(strip_header::request::layer(DST_OVERRIDE_HEADER))
@@ -341,7 +313,33 @@ impl Config {
             // target, and dispatches the request.
             .instrument_from_target()
             .push(svc::NewRouter::layer(RequestTarget::from))
-            .check_new_service::<TcpAccept, http::Request<_>>()
+            .into_inner()
+    }
+
+    pub fn build_http_server<T, I, H, HSvc>(
+        &self,
+        http: H,
+        metrics: metrics::Proxy,
+        span_sink: Option<mpsc::Sender<oc::Span>>,
+        drain: drain::Watch,
+    ) -> impl svc::NewService<
+        (http::Version, T),
+        Service = impl svc::Service<I, Response = (), Error = Error, Future = impl Send> + Clone,
+    > + Clone
+    where
+        T: Clone + Send + Sync + Unpin + 'static,
+        for<'t> &'t T: Into<SocketAddr>,
+        I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Send + Unpin + 'static,
+        H: svc::NewService<T, Service = HSvc> + Clone + Send + 'static,
+        HSvc: svc::Service<http::Request<http::BoxBody>, Response = http::Response<http::BoxBody>>
+            + Clone
+            + Send
+            + Unpin
+            + 'static,
+        HSvc::Error: Into<Error>,
+        HSvc::Future: Send,
+    {
+        svc::stack(http)
             // Used by tap.
             .push_http_insert_target()
             .push_on_response(
@@ -349,10 +347,15 @@ impl Config {
                     // Downgrades the protocol if upgraded by an outbound proxy.
                     .push(orig_proto::Downgrade::layer())
                     // Limits the number of in-flight requests.
-                    .push(svc::ConcurrencyLimit::layer(max_in_flight_requests))
+                    .push(svc::ConcurrencyLimit::layer(
+                        self.proxy.max_in_flight_requests,
+                    ))
                     // Eagerly fail requests when the proxy is out of capacity for a
                     // dispatch_timeout.
-                    .push(svc::FailFast::layer("HTTP Server", dispatch_timeout))
+                    .push(svc::FailFast::layer(
+                        "HTTP Server",
+                        self.proxy.dispatch_timeout,
+                    ))
                     .push(metrics.http_errors)
                     // Synthesizes responses for proxy errors.
                     .push(errors::layer())
@@ -360,62 +363,17 @@ impl Config {
                         SpanConverter::server(span_sink, trace_labels())
                     })))
                     .push(metrics.stack.layer(stack_labels("http", "server")))
-                    .push(http::BoxRequest::layer())
-                    .push(http::BoxResponse::layer()),
+                    .push(http::BoxResponse::layer())
+                    .push(http::BoxRequest::layer()),
             )
             .push(http::NewNormalizeUri::layer())
-            .push_map_target(|(_, accept): (_, TcpAccept)| accept)
+            .push_map_target(|(_, t): (_, T)| t)
             .instrument(|(v, _): &(http::Version, _)| debug_span!("http", %v))
-            .check_new_service::<(http::Version, TcpAccept), http::Request<_>>()
-            .push(http::NewServeHttp::layer(h2_settings, drain))
-            .push(svc::stack::NewOptional::layer(tcp))
-            .push_cache(cache_max_idle_age)
-            .push(transport::NewDetectService::layer(
-                transport::detect::DetectTimeout::new(
-                    detect_protocol_timeout,
-                    http::DetectHttp::default(),
-                ),
+            .push(http::NewServeHttp::layer(
+                self.proxy.connect.h2_settings,
+                drain,
             ))
-            .into_inner()
-    }
-
-    pub fn build_tls_accept<I, D, DSvc, F, FSvc>(
-        self,
-        detect: D,
-        tcp_forward: F,
-        identity: tls::Conditional<identity::Local>,
-        metrics: metrics::Proxy,
-    ) -> impl svc::NewService<
-        listen::Addrs,
-        Service = impl svc::Service<I, Response = (), Error = Error, Future = impl Send>,
-    > + Clone
-    where
-        I: tls::accept::Detectable + Send + 'static,
-        D: svc::NewService<TcpAccept, Service = DSvc> + Clone + Send + 'static,
-        DSvc: svc::Service<SensorIo<tls::accept::Io<I>>, Response = ()> + Send + 'static,
-        DSvc::Error: Into<Error>,
-        DSvc::Future: Send,
-        F: svc::NewService<TcpEndpoint, Service = FSvc> + Clone + 'static,
-        FSvc: svc::Service<SensorIo<I>, Response = ()> + 'static,
-        FSvc::Error: Into<Error>,
-        FSvc::Future: Send,
-    {
-        svc::stack(detect)
-            .push_request_filter(self.require_identity_for_inbound_ports)
-            .push(metrics.transport.layer_accept())
-            .push_map_target(TcpAccept::from)
-            .push(tls::NewDetectTls::layer(
-                identity,
-                self.proxy.detect_protocol_timeout,
-            ))
-            .push_switch(
-                self.disable_protocol_detection_for_ports,
-                svc::stack(tcp_forward)
-                    .push_map_target(TcpEndpoint::from)
-                    .push(metrics.transport.layer_accept())
-                    .push_map_target(TcpAccept::from)
-                    .into_inner(),
-            )
+            .check_new_service::<(http::Version, T), I>()
             .into_inner()
     }
 }

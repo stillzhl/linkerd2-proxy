@@ -12,7 +12,7 @@ pub mod tap;
 pub use self::metrics::Metrics;
 use futures::{future, FutureExt, TryFutureExt};
 pub use linkerd2_app_core::{self as core, metrics, trace};
-use linkerd2_app_core::{control::ControlAddr, dns, drain, proxy::http, serve, svc, Error};
+use linkerd2_app_core::{control::ControlAddr, dns, drain, serve, svc, Error};
 use linkerd2_app_gateway as gateway;
 use linkerd2_app_inbound as inbound;
 use linkerd2_app_outbound as outbound;
@@ -227,9 +227,7 @@ impl Config {
                         inbound_addr,
                         local_identity,
                         connect,
-                        svc::stack(http_gateway)
-                            .push_on_response(http::BoxRequest::layer())
-                            .into_inner(),
+                        http_gateway,
                         None as Option<svc::Fail<(), String>>, // TODO tcp gateway
                         dst.profiles,
                         tap_layer,

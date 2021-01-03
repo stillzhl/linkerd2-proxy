@@ -9,7 +9,7 @@ use linkerd2_app_core::{
     proxy::{api_resolve::Metadata, core::resolve::Resolve},
     spans::SpanConverter,
     svc,
-    transport::{self, io, listen, metrics::SensorIo, tls},
+    transport::{io, listen, metrics::SensorIo, tls, NewDetectService},
     Addr, Error, IpMatch, TraceContext,
 };
 use std::net::SocketAddr;
@@ -195,11 +195,9 @@ where
                 .into_inner(),
         ))
         .push_cache(cache_max_idle_age)
-        .push(transport::NewDetectService::layer(
-            transport::detect::DetectTimeout::new(
-                detect_protocol_timeout,
-                http::DetectHttp::default(),
-            ),
+        .push(NewDetectService::layer(
+            detect_protocol_timeout,
+            http::DetectHttp::default(),
         ))
         .push_switch(
             SkipByProfile,

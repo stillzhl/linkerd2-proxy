@@ -53,9 +53,14 @@ impl<N, D: Clone> NewDetectService<N, D> {
             capacity: Self::BUFFER_CAPACITY,
         }
     }
+}
 
-    pub fn layer(detect: D) -> impl layer::Layer<N, Service = Self> + Clone {
-        layer::mk(move |new| Self::new(new, detect.clone()))
+impl<N, D: Clone> NewDetectService<N, DetectTimeout<D>> {
+    pub fn layer(
+        timeout: time::Duration,
+        detect: D,
+    ) -> impl layer::Layer<N, Service = Self> + Clone {
+        layer::mk(move |new| Self::new(new, DetectTimeout::new(timeout, detect.clone())))
     }
 }
 

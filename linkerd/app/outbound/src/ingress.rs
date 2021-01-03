@@ -6,7 +6,7 @@ use linkerd2_app_core::{
     profiles,
     spans::SpanConverter,
     svc::{self},
-    transport::{self, io, listen, tls},
+    transport::{self, io, listen, tls, NewDetectService},
     Addr, AddrMatch, Error, TraceContext,
 };
 use tokio::sync::mpsc;
@@ -118,11 +118,9 @@ where
         .push(http::NewServeHttp::layer(h2_settings, drain))
         .push(svc::stack::NewUnwrap::layer(tcp))
         .push_cache(cache_max_idle_age)
-        .push(transport::NewDetectService::layer(
-            transport::detect::DetectTimeout::new(
-                detect_protocol_timeout,
-                http::DetectHttp::default(),
-            ),
+        .push(NewDetectService::layer(
+            detect_protocol_timeout,
+            http::DetectHttp::default(),
         ))
         .check_new_service::<tcp::Accept, transport::metrics::SensorIo<I>>()
         .push(metrics.transport.layer_accept())

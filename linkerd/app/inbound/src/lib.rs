@@ -24,7 +24,7 @@ use linkerd2_app_core::{
     reconnect,
     spans::SpanConverter,
     svc,
-    transport::{self, detect::DetectTimeout, io, listen, tls, NewDetectService},
+    transport::{self, io, listen, tls, NewDetectService},
     Error, NameAddr, NameMatch, TraceContext, DST_OVERRIDE_HEADER,
 };
 use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
@@ -151,6 +151,8 @@ impl Config {
 
             // If there was an opaque transport header, use it to determine the
             // local endpoint and forward the connection.
+            //
+            // TODO Instrument TCP gateway here.
             svc::stack(tcp_forward.clone())
                 .push_map_target(|(h, _): (opaque_transport::Header, _)| TcpEndpoint::from(h))
                 .push(svc::NewUnwrap::layer(
@@ -161,16 +163,16 @@ impl Config {
                         .push(svc::NewUnwrap::layer(
                             svc::Fail::<_, RefuseNonOpaque>::default(),
                         ))
-                        .push(NewDetectService::layer(DetectTimeout::new(
+                        .push(NewDetectService::layer(
                             self.proxy.detect_protocol_timeout,
                             http::DetectHttp::default(),
-                        )))
+                        ))
                         .into_inner(),
                 ))
-                .push(NewDetectService::layer(DetectTimeout::new(
+                .push(NewDetectService::layer(
                     self.proxy.detect_protocol_timeout,
                     opaque_transport::DetectHeader::default(),
-                )))
+                ))
                 .into_inner()
         };
 
@@ -194,10 +196,10 @@ impl Config {
                     .check_new::<TcpAccept>()
                     .into_inner(),
             ))
-            .push(NewDetectService::layer(DetectTimeout::new(
+            .push(NewDetectService::layer(
                 self.proxy.detect_protocol_timeout,
                 http::DetectHttp::default(),
-            )))
+            ))
             // If the connection targets the inbound port, use the direct stack.
             .push_switch(prevent_loop, direct)
             .push_request_filter(self.require_identity_for_inbound_ports)

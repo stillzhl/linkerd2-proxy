@@ -213,7 +213,7 @@ impl Config {
             let _inbound = span.enter();
             info!(listen.addr = %inbound_addr);
 
-            let http_gateway = gateway.build(
+            let http_gateway = gateway.build_http(
                 outbound_http,
                 dst.profiles.clone(),
                 local_identity.as_ref().map(|l| l.name().clone()),

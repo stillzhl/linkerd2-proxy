@@ -1,4 +1,4 @@
-use super::make::MakeGateway;
+use super::http::NewHttpGateway;
 use linkerd2_app_core::{
     discovery_rejected, profiles, proxy::http, svc, transport::tls, Error, NameAddr, NameMatch,
 };
@@ -15,7 +15,7 @@ pub struct Config {
 struct Allow(NameMatch);
 
 impl Config {
-    pub fn build<O, P, S>(
+    pub fn build_http<O, P, S>(
         self,
         outbound: O,
         profiles: P,
@@ -27,10 +27,8 @@ impl Config {
             Response = http::Response<http::BoxBody>,
             Error = impl Into<Error>,
             Future = impl Send,
-        > + Send
-                      + 'static,
+        >,
     > + Clone
-           + Send
     where
         P: profiles::GetProfile<NameAddr> + Clone + Send + 'static,
         P::Future: Send + 'static,
@@ -42,13 +40,13 @@ impl Config {
         S::Error: Into<Error>,
         S::Future: Send + 'static,
     {
-        svc::stack(MakeGateway::new(outbound, local_id))
-            .check_new_service::<super::make::Target, http::Request<http::BoxBody>>()
+        svc::stack(outbound)
+            .push(NewHttpGateway::layer(local_id))
+            .check_new_service::<super::http::Target, http::Request<http::BoxBody>>()
             .push(profiles::discover::layer(
                 profiles,
                 Allow(self.allow_discovery),
             ))
-            .check_new_service::<inbound::Target, http::Request<http::BoxBody>>()
             .instrument(|_: &inbound::Target| debug_span!("gateway"))
             .into_inner()
     }

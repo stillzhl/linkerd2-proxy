@@ -1,8 +1,7 @@
 #![deny(warnings, rust_2018_idioms)]
 
 mod config;
-mod gateway;
-mod make;
+mod http;
 
 pub use self::config::Config;
 
@@ -139,7 +138,7 @@ mod test {
                     Ok::<_, Never>(Some(rx))
                 });
                 let allow_discovery = NameMatch::new(Some(dns::Suffix::from_str(suffix).unwrap()));
-                Config { allow_discovery }.build(
+                Config { allow_discovery }.build_http(
                     move |_: _| outbound.clone(),
                     profiles,
                     tls::PeerIdentity::Some(identity::Name::from(

@@ -217,28 +217,27 @@ impl Config {
             let _inbound = span.enter();
             info!(listen.addr = %inbound_addr);
 
-            let http_gateway = gateway.build_http(
+            let _http_gateway = gateway.build_http(
                 outbound_http,
                 dst.profiles.clone(),
                 local_identity.as_ref().map(|l| l.name().clone()),
             );
 
-            let connect = inbound::tcp_connect(&inbound.proxy.connect);
+            let inbound_rt = inbound.build(
+                inbound_addr.port(),
+                local_identity,
+                dst.profiles,
+                tap_registry,
+                inbound_metrics,
+                oc_span_sink,
+                drain_rx.clone(),
+            );
             tokio::spawn(
                 serve::serve(
                     inbound_listen,
-                    inbound.build(
-                        inbound_addr,
-                        local_identity,
-                        connect,
-                        http_gateway,
-                        None as Option<svc::Fail<(), String>>, // TODO tcp gateway
-                        dst.profiles,
-                        tap_registry,
-                        inbound_metrics,
-                        oc_span_sink,
-                        drain_rx.clone(),
-                    ),
+                    inbound_rt.server(svc::stack(
+                        svc::Fail::<_, inbound::NonOpaqueRefused>::default(),
+                    )),
                     drain_rx.signaled(),
                 )
                 .map_err(|e| panic!("inbound failed: {}", e))

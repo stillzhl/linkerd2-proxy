@@ -20,15 +20,17 @@ impl Config {
         outbound: O,
         profiles: P,
         local_id: tls::PeerIdentity,
-    ) -> impl svc::NewService<
-        inbound::Target,
-        Service = impl tower::Service<
-            http::Request<http::BoxBody>,
-            Response = http::Response<http::BoxBody>,
-            Error = impl Into<Error>,
-            Future = impl Send,
-        >,
-    > + Clone
+    ) -> svc::Stack<
+        impl svc::NewService<
+                inbound::Target,
+                Service = impl tower::Service<
+                    http::Request<http::BoxBody>,
+                    Response = http::Response<http::BoxBody>,
+                    Error = impl Into<Error>,
+                    Future = impl Send,
+                >,
+            > + Clone,
+    >
     where
         P: profiles::GetProfile<NameAddr> + Clone + Send + 'static,
         P::Future: Send + 'static,
@@ -48,7 +50,6 @@ impl Config {
                 Allow(self.allow_discovery),
             ))
             .instrument(|_: &inbound::Target| debug_span!("gateway"))
-            .into_inner()
     }
 }
 

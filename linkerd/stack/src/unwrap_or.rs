@@ -25,8 +25,8 @@ impl<A, B> NewUnwrapOr<A, B> {
 
 impl<T, U, A, B> NewService<(Option<T>, U)> for NewUnwrapOr<A, B>
 where
-    A: NewService<(T, U)>,
-    B: NewService<U>,
+    A: NewService<(T, U)> + Clone,
+    B: NewService<U> + Clone,
 {
     type Service = Either<A::Service, B::Service>;
 

@@ -80,7 +80,7 @@ impl Config {
         http_gateway: H,
         tcp_gateway: Option<T>,
         profiles_client: P,
-        tap_layer: tap::Layer,
+        tap: tap::Registry,
         metrics: metrics::Proxy,
         span_sink: Option<mpsc::Sender<oc::Span>>,
         drain: drain::Watch,
@@ -189,13 +189,8 @@ impl Config {
         };
 
         let http = {
-            let router = self.http_router(
-                connect,
-                profiles_client,
-                tap_layer,
-                &metrics,
-                span_sink.clone(),
-            );
+            let router =
+                self.http_router(connect, profiles_client, tap, &metrics, span_sink.clone());
             self.http_server(router, &metrics, span_sink, drain)
         };
 
@@ -237,7 +232,7 @@ impl Config {
         &self,
         connect: C,
         profiles_client: P,
-        tap_layer: tap::Layer,
+        tap: tap::Registry,
         metrics: &metrics::Proxy,
         span_sink: Option<mpsc::Sender<oc::Span>>,
     ) -> impl svc::NewService<
@@ -276,7 +271,7 @@ impl Config {
         let target = endpoint
             .push_map_target(HttpEndpoint::from)
             // Registers the stack to be tapped.
-            .push(tap_layer)
+            .push(tap::NewTapHttp::layer(tap))
             // Records metrics for each `Target`.
             .push(metrics.http_endpoint.to_layer::<classify::Response, _>())
             .push_on_response(TraceContext::layer(

@@ -20,7 +20,7 @@ impl<T, U, E> NewService<T> for Fail<U, E> {
     }
 }
 
-impl<R, U, E> tower::Service<R> for Fail<U, E>
+impl<T, U, E> tower::Service<T> for Fail<U, E>
 where
     E: Default + Into<Error>,
 {
@@ -34,7 +34,7 @@ where
     }
 
     #[inline]
-    fn call(&mut self, _: R) -> Self::Future {
+    fn call(&mut self, _: T) -> Self::Future {
         future::err(E::default().into())
     }
 }

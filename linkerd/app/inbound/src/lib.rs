@@ -49,7 +49,7 @@ pub struct Config {
 pub struct SkipByPort(std::sync::Arc<indexmap::IndexSet<u16>>);
 
 #[derive(Default)]
-struct RefuseNonOpaque(());
+struct NonOpaqueRefused(());
 
 // === impl Config ===
 
@@ -173,7 +173,7 @@ impl Config {
                     // were refused.
                     svc::stack(self.http_server(http, &metrics, span_sink.clone(), drain.clone()))
                         .push(svc::NewUnwrapOr::layer(
-                            svc::Fail::<_, RefuseNonOpaque>::default(),
+                            svc::Fail::<_, NonOpaqueRefused>::default(),
                         ))
                         .push(NewDetectService::layer(
                             self.proxy.detect_protocol_timeout,
@@ -429,13 +429,13 @@ impl svc::stack::Switch<listen::Addrs> for SkipByPort {
     }
 }
 
-// === impl RefuseNonOpaque ===
+// === impl NonOpaqueRefused ===
 
-impl Into<Error> for RefuseNonOpaque {
+impl Into<Error> for NonOpaqueRefused {
     fn into(self) -> Error {
         Error::from(io::Error::new(
             io::ErrorKind::ConnectionRefused,
-            "Non-opaque connection refused",
+            "Non-opaque-transport connection refused",
         ))
     }
 }

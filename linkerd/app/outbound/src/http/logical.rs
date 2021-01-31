@@ -34,7 +34,7 @@ where
     ESvc::Future: Send,
     R: Resolve<Addr, Endpoint = Metadata, Error = Error> + Clone + Send + 'static,
     R::Resolution: Send,
-    R::Future: Send,
+    R::Future: Send + Unpin,
 {
     let ProxyConfig {
         buffer_capacity,

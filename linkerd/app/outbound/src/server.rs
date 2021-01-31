@@ -33,7 +33,7 @@ where
     I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + std::fmt::Debug + Send + Unpin + 'static,
     R: Resolve<Addr, Endpoint = Metadata, Error = Error> + Clone + Send + 'static,
     R::Resolution: Send,
-    R::Future: Send,
+    R::Future: Send + Unpin,
     C: svc::Service<tcp::Endpoint> + Clone + Send + 'static,
     C::Response: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin,
     C::Error: Into<Error>,

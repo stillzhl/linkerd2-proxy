@@ -27,7 +27,7 @@ where
     C::Future: Send,
     R: Resolve<Addr, Endpoint = Metadata, Error = Error> + Clone + 'static,
     R::Resolution: Send,
-    R::Future: Send,
+    R::Future: Send + Unpin,
 {
     svc::stack(connect)
         .push_make_thunk()

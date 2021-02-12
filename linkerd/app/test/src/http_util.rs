@@ -3,7 +3,7 @@ use crate::io;
 use futures::FutureExt;
 use hyper::{
     body::HttpBody,
-    client::conn::{Builder as ClientBuilder, SendRequest},
+    client::conn::{self, SendRequest},
     Body, Request, Response,
 };
 use std::{
@@ -18,6 +18,15 @@ use tracing::Instrument;
 pub struct Server {
     settings: hyper::server::conn::Http,
     f: HandleFuture,
+}
+#[derive(Debug, Clone)]
+pub struct ClientBuilder {
+    inner: conn::Builder,
+}
+
+pub struct Client {
+    client: SendRequest<Body>,
+    bg: JoinHandle<()>,
 }
 
 type HandleFuture = Box<dyn (FnMut(Request<Body>) -> Result<Response<Body>, Error>) + Send>;
@@ -172,6 +181,55 @@ impl Server {
             });
             tokio::spawn(settings.serve_connection(server_io, svc).in_current_span());
             Ok(BoxedIo::new(client_io))
+        }
+    }
+}
+
+// === impl ClientBuilder ===
+impl ClientBuilder {
+    pub fn http1() -> Self {
+        Self {
+            inner: conn::Builder::new(),
+        }
+    }
+
+    pub fn http2() -> Self {
+        let mut inner = conn::Builder::new();
+        inner.http2_only(true);
+        Self { inner }
+    }
+
+    pub async fn connect_duplex(&self, io: io::DuplexStream) -> Client {
+        let (client, conn) = self.inner.handshake(io).await.expect("Client must connect");
+        let bg = conn
+            .map(|res| {
+                tracing::info!(?res, "Client background complete");
+                res.expect("client bg task failed");
+            })
+            .instrument(tracing::info_span!("client_bg"));
+        let bg = tokio::spawn(bg);
+        Client { client, bg }
+    }
+}
+
+impl Client {
+    #[tracing::instrument(skip(self))]
+    pub async fn request(&mut self, request: Request<Body>) -> Response<Body> {
+        let ready = self.client.ready_and();
+        let rsp = async move {
+            ready
+                .await
+                .expect("Client must not fail")
+                .call(request)
+                .await
+                .expect("Request must succeed")
+        };
+
+        tokio::select! {
+            rsp = rsp => return rsp,
+            res = &mut self.bg => {
+                panic!("background task terminated: {:?}", res);
+            }
         }
     }
 }

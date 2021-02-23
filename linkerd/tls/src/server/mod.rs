@@ -1,25 +1,16 @@
 mod client_hello;
+mod handshake;
 
-use crate::{LocalId, NegotiatedProtocol, ServerId};
+use self::handshake::NewHandshake;
+use crate::{NegotiatedProtocol, ServerId};
 use bytes::BytesMut;
-use futures::prelude::*;
 use linkerd_conditional::Conditional;
-use linkerd_dns_name as dns;
-use linkerd_error::Error;
+use linkerd_detect::NewDetectService;
 use linkerd_identity as id;
 use linkerd_io::{self as io, AsyncReadExt, EitherIo, PrefixedIo};
-use linkerd_stack::{layer, NewService, Param};
-use rustls::Session;
-use std::{
-    fmt,
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use linkerd_stack::layer;
+use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 pub use tokio_rustls::server::TlsStream;
-use tower::util::ServiceExt;
 use tracing::{debug, trace, warn};
 
 pub type Config = Arc<rustls::ServerConfig>;
@@ -68,13 +59,13 @@ pub type ConditionalServerTls = Conditional<ServerTls, NoServerTls>;
 
 pub type Meta<T> = (ConditionalServerTls, T);
 
-pub type Io<T> = EitherIo<PrefixedIo<T>, TlsStream<PrefixedIo<T>>>;
+pub type Io<T> = EitherIo<T, TlsStream<T>>;
 
 pub type Connection<T, I> = (Meta<T>, Io<I>);
 
 #[derive(Clone, Debug)]
-pub struct NewDetectTls<L, A> {
-    local_identity: Option<L>,
+pub struct NewTransparentTls<L, A> {
+    identity: Option<L>,
     inner: A,
     timeout: Duration,
 }
@@ -83,119 +74,36 @@ pub struct NewDetectTls<L, A> {
 pub struct DetectTimeout(());
 
 #[derive(Clone, Debug)]
-pub struct DetectTls<T, L, N> {
-    target: T,
-    local_identity: Option<L>,
-    inner: N,
+pub struct DetectSni(());
+
+type TransparentTls<L, N> = NewDetectService<DetectSni, NewHandshake<L, N>>;
+
+pub fn new<L, N>(identity: Option<L>, inner: N, timeout: Duration) -> TransparentTls<L, N> {
+    NewDetectService::new(timeout, DetectSni(()), NewHandshake::new(identity, inner))
+}
+
+pub fn layer<L, N>(
+    identity: Option<L>,
     timeout: Duration,
-}
-
-// The initial peek buffer is statically allocated on the stack and is fairly small; but it is
-// large enough to hold the ~300B ClientHello sent by proxies.
-const PEEK_CAPACITY: usize = 512;
-
-// A larger fallback buffer is allocated onto the heap if the initial peek buffer is
-// insufficient. This is the same value used in HTTP detection.
-const BUFFER_CAPACITY: usize = 8192;
-
-impl<I, N> NewDetectTls<I, N> {
-    pub fn new(local_identity: Option<I>, inner: N, timeout: Duration) -> Self {
-        Self {
-            local_identity,
-            inner,
-            timeout,
-        }
-    }
-
-    pub fn layer(
-        local_identity: Option<I>,
-        timeout: Duration,
-    ) -> impl layer::Layer<N, Service = Self> + Clone
-    where
-        I: Clone,
-    {
-        layer::mk(move |inner| Self::new(local_identity.clone(), inner, timeout))
-    }
-}
-
-impl<T, L, N> NewService<T> for NewDetectTls<L, N>
+) -> impl layer::Layer<N, Service = TransparentTls<L, N>> + Clone
 where
-    L: Clone + Param<LocalId> + Param<Config>,
-    N: NewService<Meta<T>> + Clone,
+    L: Clone,
+    N: Clone,
 {
-    type Service = DetectTls<T, L, N>;
-
-    fn new_service(&mut self, target: T) -> Self::Service {
-        DetectTls {
-            target,
-            local_identity: self.local_identity.clone(),
-            inner: self.inner.clone(),
-            timeout: self.timeout,
-        }
-    }
+    layer::mk(move |inner| new(identity.clone(), inner, timeout))
 }
 
-impl<I, L, N, NSvc, T> tower::Service<I> for DetectTls<T, L, N>
+async fn detect<I>(mut io: I) -> io::Result<(Option<ServerId>, io::PrefixedIo<I>)>
 where
-    I: io::Peek + io::AsyncRead + io::AsyncWrite + Send + Sync + Unpin + 'static,
-    L: Param<LocalId> + Param<Config>,
-    N: NewService<Meta<T>, Service = NSvc> + Clone + Send + 'static,
-    NSvc: tower::Service<Io<I>, Response = ()> + Send + 'static,
-    NSvc::Error: Into<Error>,
-    NSvc::Future: Send,
-    T: Clone + Send + 'static,
+    I: io::Peek + io::AsyncRead + Send + Sync + Unpin,
 {
-    type Response = ();
-    type Error = Error;
-    type Future = Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'static>>;
+    // The initial peek buffer is statically allocated on the stack and is fairly small; but it is
+    // large enough to hold the ~300B ClientHello sent by proxies.
+    const PEEK_CAPACITY: usize = 512;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, io: I) -> Self::Future {
-        let target = self.target.clone();
-        let mut new_accept = self.inner.clone();
-
-        match self.local_identity.as_ref() {
-            Some(local) => {
-                let config = Param::<Config>::param(local);
-                let local_id = Param::<LocalId>::param(local);
-                let timeout = tokio::time::sleep(self.timeout);
-
-                Box::pin(async move {
-                    let (peer, io) = tokio::select! {
-                        res = detect(io, config, local_id) => { res? }
-                        () = timeout => {
-                            return Err(DetectTimeout(()).into());
-                        }
-                    };
-                    new_accept
-                        .new_service((peer, target))
-                        .oneshot(io)
-                        .err_into::<Error>()
-                        .await
-                })
-            }
-
-            None => {
-                let peer = Conditional::None(NoServerTls::Disabled);
-                let svc = new_accept.new_service((peer, target));
-                Box::pin(svc.oneshot(EitherIo::Left(io.into())).err_into::<Error>())
-            }
-        }
-    }
-}
-
-async fn detect<I>(
-    mut io: I,
-    tls_config: Config,
-    LocalId(local_id): LocalId,
-) -> io::Result<(ConditionalServerTls, Io<I>)>
-where
-    I: io::Peek + io::AsyncRead + io::AsyncWrite + Send + Sync + Unpin,
-{
-    const NO_TLS_META: ConditionalServerTls = Conditional::None(NoServerTls::NoClientHello);
+    // A larger fallback buffer is allocated onto the heap if the initial peek buffer is
+    // insufficient. This is the same value used in HTTP detection.
+    const BUFFER_CAPACITY: usize = 8192;
 
     // First, try to use MSG_PEEK to read the SNI from the TLS ClientHello.
     // Because peeked data does not need to be retained, we use a static
@@ -207,24 +115,7 @@ where
     let sz = io.peek(&mut buf).await?;
     debug!(sz, "Peeked bytes from TCP stream");
     match client_hello::parse_sni(&buf) {
-        Ok(Some(ServerId(sni))) if sni == local_id => {
-            trace!(%sni, "Identified matching SNI via peek");
-            // Terminate the TLS stream.
-            let (tls, io) = handshake(tls_config, PrefixedIo::from(io)).await?;
-            return Ok((Conditional::Some(tls), EitherIo::Right(io)));
-        }
-
-        Ok(Some(sni)) => {
-            trace!(%sni, "Identified non-matching SNI via peek");
-            let tls = Conditional::Some(ServerTls::Passthru { sni });
-            return Ok((tls, EitherIo::Left(io.into())));
-        }
-
-        Ok(None) => {
-            trace!("Not a matching TLS ClientHello");
-            return Ok((NO_TLS_META, EitherIo::Left(io.into())));
-        }
-
+        Ok(sni) => return Ok((sni, PrefixedIo::from(io))),
         Err(client_hello::Incomplete) => {}
     }
 
@@ -236,24 +127,7 @@ where
     while io.read_buf(&mut buf).await? != 0 {
         debug!(buf.len = %buf.len(), "Read bytes from TCP stream");
         match client_hello::parse_sni(buf.as_ref()) {
-            Ok(Some(ServerId(sni))) if sni == local_id => {
-                trace!(%sni, "Identified matching SNI via buffered read");
-                // Terminate the TLS stream.
-                let (tls, io) =
-                    handshake(tls_config.clone(), PrefixedIo::new(buf.freeze(), io)).await?;
-                return Ok((Conditional::Some(tls), EitherIo::Right(io)));
-            }
-
-            Ok(Some(sni)) => {
-                trace!(%sni, "Identified non-matching SNI via peek");
-                let tls = Conditional::Some(ServerTls::Passthru { sni });
-                return Ok((tls, EitherIo::Left(io.into())));
-            }
-
-            Ok(None) => {
-                trace!("Not a matching TLS ClientHello");
-                return Ok((NO_TLS_META, EitherIo::Left(io.into())));
-            }
+            Ok(sni) => return Ok((sni, io.into())),
 
             Err(client_hello::Incomplete) => {
                 if buf.capacity() == 0 {
@@ -269,53 +143,8 @@ where
     }
 
     trace!("Could not read TLS ClientHello via buffering");
-    let io = EitherIo::Left(PrefixedIo::new(buf.freeze(), io));
-    Ok((NO_TLS_META, io))
-}
-
-async fn handshake<T>(tls_config: Config, io: T) -> io::Result<(ServerTls, TlsStream<T>)>
-where
-    T: io::AsyncRead + io::AsyncWrite + Unpin,
-{
-    let io = tokio_rustls::TlsAcceptor::from(tls_config)
-        .accept(io)
-        .await?;
-
-    // Determine the peer's identity, if it exist.
-    let client_id = client_identity(&io);
-
-    let negotiated_protocol = io
-        .get_ref()
-        .1
-        .get_alpn_protocol()
-        .map(|b| NegotiatedProtocol(b.into()));
-
-    debug!(client.id = ?client_id, alpn = ?negotiated_protocol, "Accepted TLS connection");
-    let tls = ServerTls::Established {
-        client_id,
-        negotiated_protocol,
-    };
-    Ok((tls, io))
-}
-
-fn client_identity<S>(tls: &TlsStream<S>) -> Option<ClientId> {
-    use webpki::GeneralDNSNameRef;
-
-    let (_io, session) = tls.get_ref();
-    let certs = session.get_peer_certificates()?;
-    let c = certs.first().map(rustls::Certificate::as_ref)?;
-    let end_cert = webpki::EndEntityCert::from(c).ok()?;
-    let dns_names = end_cert.dns_names().ok()?;
-
-    match dns_names.first()? {
-        GeneralDNSNameRef::DNSName(n) => {
-            Some(ClientId(id::Name::from(dns::Name::from(n.to_owned()))))
-        }
-        GeneralDNSNameRef::Wildcard(_) => {
-            // Wildcards can perhaps be handled in a future path...
-            None
-        }
-    }
+    let io = PrefixedIo::new(buf.freeze(), io);
+    Ok((None, io))
 }
 
 impl fmt::Display for DetectTimeout {

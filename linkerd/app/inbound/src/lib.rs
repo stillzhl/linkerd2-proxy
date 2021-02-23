@@ -256,7 +256,7 @@ where
             .push_request_filter(require_id)
             .push(self.runtime.metrics.transport.layer_accept())
             .push_map_target(TcpAccept::from)
-            .push(tls::NewDetectTls::layer(
+            .push(tls::NewTransparentTls::layer(
                 self.runtime.identity.clone(),
                 config.detect_protocol_timeout,
             ))

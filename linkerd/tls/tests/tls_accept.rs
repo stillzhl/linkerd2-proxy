@@ -162,7 +162,7 @@ where
         // a fixed port.
         let addr = "127.0.0.1:0".parse::<SocketAddr>().unwrap();
 
-        let mut detect = tls::NewDetectTls::new(
+        let mut detect = tls::NewTransparentTls::new(
             server_tls.map(Tls),
             move |meta: tls::server::Meta<Addrs>| {
                 let server = server.clone();

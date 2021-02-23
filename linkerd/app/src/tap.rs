@@ -42,7 +42,7 @@ impl Config {
                 let (listen_addr, listen) = config.bind.bind()?;
 
                 let service = tap::AcceptPermittedClients::new(permitted_client_ids.into(), server);
-                let accept = tls::NewDetectTls::new(
+                let accept = tls::NewTransparentTls::new(
                     identity,
                     move |meta: tls::server::Meta<Addrs>| {
                         let service = service.clone();

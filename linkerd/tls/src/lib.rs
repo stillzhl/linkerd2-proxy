@@ -9,7 +9,7 @@ pub mod server;
 
 pub use self::{
     client::{Client, ClientTls, ConditionalClientTls, NoClientTls, ServerId},
-    server::{ClientId, ConditionalServerTls, NewDetectTls, NoServerTls, ServerTls},
+    server::{ClientId, ConditionalServerTls, NewTransparentTls, NoServerTls, ServerTls},
 };
 
 /// A trait implented by transport streams to indicate its negotiated protocol.

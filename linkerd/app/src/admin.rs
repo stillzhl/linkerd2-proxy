@@ -71,7 +71,7 @@ impl Config {
             .push(metrics.transport.layer_accept())
             .push_map_target(TcpAccept::from)
             .check_new_clone::<tls::server::Meta<listen::Addrs>>()
-            .push(tls::NewDetectTls::layer(identity, DETECT_TIMEOUT))
+            .push(tls::NewTransparentTls::layer(identity, DETECT_TIMEOUT))
             .into_inner();
 
         let serve = Box::pin(serve::serve(listen, admin, drain.signaled()));

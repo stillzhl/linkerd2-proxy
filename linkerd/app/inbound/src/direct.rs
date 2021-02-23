@@ -160,7 +160,7 @@ impl<T> Inbound<T> {
             // Build a ClientInfo target for each accepted connection. Refuse the
             // connection if it doesn't include an mTLS identity.
             .push_request_filter(ClientInfo::try_from)
-            .push(tls::NewDetectTls::layer(
+            .push(tls::NewTransparentTls::layer(
                 rt.identity.clone().map(WithTransportHeaderAlpn),
                 detect_timeout,
             ))

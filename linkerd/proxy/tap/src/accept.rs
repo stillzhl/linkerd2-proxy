@@ -6,14 +6,13 @@ use linkerd_conditional::Conditional;
 use linkerd_error::Error;
 use linkerd_io as io;
 use linkerd_proxy_http::{trace, HyperServerSvc};
-use linkerd_tls::{self as tls, server::Connection};
+use linkerd_tls as tls;
 use std::{
     future::Future,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::net::TcpStream;
 use tower::Service;
 
 #[derive(Clone, Debug)]
@@ -64,7 +63,10 @@ impl AcceptPermittedClients {
     }
 }
 
-impl<T> Service<Connection<T, io::ScopedIo<TcpStream>>> for AcceptPermittedClients {
+impl<T, I> Service<(tls::server::Meta<T>, I)> for AcceptPermittedClients
+where
+    I: io::AsyncRead + io::AsyncWrite + Send + Unpin + 'static,
+{
     type Response = ServeFuture;
     type Error = Error;
     type Future = future::Ready<Result<Self::Response, Self::Error>>;
@@ -73,7 +75,7 @@ impl<T> Service<Connection<T, io::ScopedIo<TcpStream>>> for AcceptPermittedClien
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, conn: Connection<T, io::ScopedIo<TcpStream>>) -> Self::Future {
+    fn call(&mut self, conn: (tls::server::Meta<T>, I)) -> Self::Future {
         match conn {
             ((Conditional::Some(tls), _), io) => {
                 if let tls::ServerTls::Established {

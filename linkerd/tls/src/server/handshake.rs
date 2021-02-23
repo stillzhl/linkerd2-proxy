@@ -2,6 +2,7 @@ use super::{ConditionalServerTls, Config, Io, NoServerTls, ServerTls};
 use crate::{ClientId, LocalId, NegotiatedProtocol, ServerId};
 use futures::prelude::*;
 use linkerd_conditional::Conditional;
+use linkerd_detect::Detected;
 use linkerd_dns_name as dns;
 use linkerd_error::Error;
 use linkerd_identity as id;
@@ -41,16 +42,16 @@ impl<L, N> NewHandshake<L, N> {
     }
 }
 
-impl<T, L, N> NewService<(Option<ServerId>, T)> for NewHandshake<L, N>
+impl<T, L, N> NewService<(Detected<ServerId>, T)> for NewHandshake<L, N>
 where
     L: Clone + Param<LocalId> + Param<Config>,
     N: NewService<(ConditionalServerTls, T)> + Clone,
 {
     type Service = Handshake<T, L, N, N::Service>;
 
-    fn new_service(&mut self, (sni, target): (Option<ServerId>, T)) -> Self::Service {
+    fn new_service(&mut self, (sni, target): (Detected<ServerId>, T)) -> Self::Service {
         let tls = match (self.identity.as_ref(), sni) {
-            (Some(identity), Some(ServerId(sni))) => {
+            (Some(identity), Ok(Some(ServerId(sni)))) => {
                 let LocalId(id) = identity.param();
                 if sni == id {
                     return Handshake::Enabled {
@@ -62,8 +63,9 @@ where
 
                 Conditional::Some(ServerTls::Passthru { sni: ServerId(sni) })
             }
-            (None, _) => Conditional::None(NoServerTls::NoClientHello),
-            (_, None) => Conditional::None(NoServerTls::Disabled),
+            (_, Ok(None)) => Conditional::None(NoServerTls::NoClientHello),
+            (_, Err(_timeout)) => Conditional::None(NoServerTls::DetectTimeout),
+            (None, _) => Conditional::None(NoServerTls::Disabled),
         };
         Handshake::Disabled(self.inner.new_service((tls, target)))
     }

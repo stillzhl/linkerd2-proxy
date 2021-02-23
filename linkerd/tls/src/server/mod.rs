@@ -1,17 +1,19 @@
 mod client_hello;
+mod detect;
 mod handshake;
 
-use self::handshake::NewHandshake;
+pub use self::{
+    detect::DetectSni,
+    handshake::{Handshake, NewHandshake},
+};
 use crate::{NegotiatedProtocol, ServerId};
-use bytes::BytesMut;
 use linkerd_conditional::Conditional;
-use linkerd_detect::NewDetectService;
+use linkerd_detect::{DetectService, NewDetectService};
 use linkerd_identity as id;
-use linkerd_io::{self as io, AsyncReadExt, EitherIo, PrefixedIo};
-use linkerd_stack::layer;
+use linkerd_io::EitherIo;
+use linkerd_stack::{layer, NewService, Param};
 use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 pub use tokio_rustls::server::TlsStream;
-use tracing::{debug, trace, warn};
 
 pub type Config = Arc<rustls::ServerConfig>;
 
@@ -52,6 +54,9 @@ pub enum NoServerTls {
 
     // No TLS Client Hello detected
     NoClientHello,
+
+    // TLS Client Hello could not be detected within a .timeout
+    DetectTimeout,
 }
 
 /// Indicates whether TLS was established on an accepted connection.
@@ -64,96 +69,39 @@ pub type Io<T> = EitherIo<T, TlsStream<T>>;
 pub type Connection<T, I> = (Meta<T>, Io<I>);
 
 #[derive(Clone, Debug)]
-pub struct NewTransparentTls<L, A> {
-    identity: Option<L>,
-    inner: A,
-    timeout: Duration,
+pub struct NewTransparentTls<L, N>(NewDetectService<DetectSni, NewHandshake<L, N>>);
+
+impl<L, N> NewTransparentTls<L, N> {
+    pub fn new(identity: Option<L>, inner: N, timeout: Duration) -> Self {
+        Self(NewDetectService::new(
+            timeout,
+            DetectSni::default(),
+            NewHandshake::new(identity, inner),
+        ))
+    }
+
+    pub fn layer(
+        identity: Option<L>,
+        timeout: Duration,
+    ) -> impl layer::Layer<N, Service = Self> + Clone
+    where
+        L: Clone,
+    {
+        layer::mk(move |inner| Self::new(identity.clone(), inner, timeout))
+    }
 }
 
-#[derive(Clone, Debug)]
-pub struct DetectTimeout(());
-
-#[derive(Clone, Debug)]
-pub struct DetectSni(());
-
-type TransparentTls<L, N> = NewDetectService<DetectSni, NewHandshake<L, N>>;
-
-pub fn new<L, N>(identity: Option<L>, inner: N, timeout: Duration) -> TransparentTls<L, N> {
-    NewDetectService::new(timeout, DetectSni(()), NewHandshake::new(identity, inner))
-}
-
-pub fn layer<L, N>(
-    identity: Option<L>,
-    timeout: Duration,
-) -> impl layer::Layer<N, Service = TransparentTls<L, N>> + Clone
+impl<T, L, N> NewService<T> for NewTransparentTls<L, N>
 where
-    L: Clone,
-    N: Clone,
+    L: Clone + Param<crate::LocalId> + Param<Config>,
+    N: NewService<(ConditionalServerTls, T)> + Clone,
 {
-    layer::mk(move |inner| new(identity.clone(), inner, timeout))
-}
+    type Service = DetectService<T, DetectSni, NewHandshake<L, N>>;
 
-async fn detect<I>(mut io: I) -> io::Result<(Option<ServerId>, io::PrefixedIo<I>)>
-where
-    I: io::Peek + io::AsyncRead + Send + Sync + Unpin,
-{
-    // The initial peek buffer is statically allocated on the stack and is fairly small; but it is
-    // large enough to hold the ~300B ClientHello sent by proxies.
-    const PEEK_CAPACITY: usize = 512;
-
-    // A larger fallback buffer is allocated onto the heap if the initial peek buffer is
-    // insufficient. This is the same value used in HTTP detection.
-    const BUFFER_CAPACITY: usize = 8192;
-
-    // First, try to use MSG_PEEK to read the SNI from the TLS ClientHello.
-    // Because peeked data does not need to be retained, we use a static
-    // buffer to prevent needless heap allocation.
-    //
-    // Anecdotally, the ClientHello sent by Linkerd proxies is <300B. So a
-    // ~500B byte buffer is more than enough.
-    let mut buf = [0u8; PEEK_CAPACITY];
-    let sz = io.peek(&mut buf).await?;
-    debug!(sz, "Peeked bytes from TCP stream");
-    match client_hello::parse_sni(&buf) {
-        Ok(sni) => return Ok((sni, PrefixedIo::from(io))),
-        Err(client_hello::Incomplete) => {}
-    }
-
-    // Peeking didn't return enough data, so instead we'll allocate more
-    // capacity and try reading data from the socket.
-    debug!("Attempting to buffer TLS ClientHello after incomplete peek");
-    let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
-    debug!(buf.capacity = %buf.capacity(), "Reading bytes from TCP stream");
-    while io.read_buf(&mut buf).await? != 0 {
-        debug!(buf.len = %buf.len(), "Read bytes from TCP stream");
-        match client_hello::parse_sni(buf.as_ref()) {
-            Ok(sni) => return Ok((sni, io.into())),
-
-            Err(client_hello::Incomplete) => {
-                if buf.capacity() == 0 {
-                    // If we can't buffer an entire TLS ClientHello, it
-                    // almost definitely wasn't initiated by another proxy,
-                    // at least.
-                    warn!("Buffer insufficient for TLS ClientHello");
-                    break;
-                }
-                // Continue if there is still buffer capacity.
-            }
-        }
-    }
-
-    trace!("Could not read TLS ClientHello via buffering");
-    let io = PrefixedIo::new(buf.freeze(), io);
-    Ok((None, io))
-}
-
-impl fmt::Display for DetectTimeout {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TLS detection timeout")
+    fn new_service(&mut self, target: T) -> Self::Service {
+        self.0.new_service(target)
     }
 }
-
-impl std::error::Error for DetectTimeout {}
 
 // === impl ClientId ===
 
@@ -197,6 +145,7 @@ impl fmt::Display for NoServerTls {
             Self::Loopback => write!(f, "loopback"),
             Self::PortSkipped => write!(f, "port_skipped"),
             Self::NoClientHello => write!(f, "no_tls_from_remote"),
+            Self::DetectTimeout => write!(f, "detect_timeout"),
         }
     }
 }

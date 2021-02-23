@@ -1,4 +1,4 @@
-use super::{ConditionalServerTls, Config, Io, NoServerTls, ServerTls};
+use super::{ConditionalServerTls, Config, NoServerTls, ServerTls};
 use crate::{ClientId, LocalId, NegotiatedProtocol, ServerId};
 use futures::prelude::*;
 use linkerd_conditional::Conditional;
@@ -6,7 +6,7 @@ use linkerd_detect::Detected;
 use linkerd_dns_name as dns;
 use linkerd_error::Error;
 use linkerd_identity as id;
-use linkerd_io::{self as io, EitherIo};
+use linkerd_io as io;
 use linkerd_stack::{layer, NewService, Param};
 use rustls::Session;
 use std::{
@@ -76,7 +76,7 @@ where
     I: io::AsyncRead + io::AsyncWrite + Send + Sync + Unpin + 'static,
     L: Param<LocalId> + Param<Config>,
     N: NewService<(ConditionalServerTls, T), Service = NSvc> + Clone + Send + 'static,
-    NSvc: tower::Service<Io<I>, Response = ()> + Send + 'static,
+    NSvc: tower::Service<io::EitherIo<I, TlsStream<I>>, Response = ()> + Send + 'static,
     NSvc::Error: Into<Error>,
     NSvc::Future: Send,
     T: Clone + Send + 'static,
@@ -108,13 +108,15 @@ where
                     let (tls, io) = Self::handshake(config, io).await?;
                     inner
                         .new_service((Conditional::Some(tls), target))
-                        .oneshot(EitherIo::Right(io))
+                        .oneshot(io::EitherIo::Right(io))
                         .err_into::<Error>()
                         .await
                 })
             }
 
-            Self::Disabled(inner) => Box::pin(inner.call(EitherIo::Left(io)).err_into::<Error>()),
+            Self::Disabled(inner) => {
+                Box::pin(inner.call(io::EitherIo::Left(io)).err_into::<Error>())
+            }
         }
     }
 }

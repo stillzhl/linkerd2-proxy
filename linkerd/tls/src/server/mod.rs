@@ -10,7 +10,7 @@ use crate::{NegotiatedProtocol, ServerId};
 use linkerd_conditional::Conditional;
 use linkerd_detect::{DetectService, NewDetectService};
 use linkerd_identity as id;
-use linkerd_io::EitherIo;
+use linkerd_io as io;
 use linkerd_stack::{layer, NewService, Param};
 use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 pub use tokio_rustls::server::TlsStream;
@@ -64,9 +64,7 @@ pub type ConditionalServerTls = Conditional<ServerTls, NoServerTls>;
 
 pub type Meta<T> = (ConditionalServerTls, T);
 
-pub type Io<T> = EitherIo<T, TlsStream<T>>;
-
-pub type Connection<T, I> = (Meta<T>, Io<I>);
+pub type TransparentIo<T> = io::EitherIo<io::PrefixedIo<T>, TlsStream<io::PrefixedIo<T>>>;
 
 #[derive(Clone, Debug)]
 pub struct NewTransparentTls<L, N>(NewDetectService<DetectSni, NewHandshake<L, N>>);

@@ -49,8 +49,8 @@ pub struct ClientInfo {
     pub local_addr: SocketAddr,
 }
 
-type FwdIo<I> = io::PrefixedIo<SensorIo<tls::server::Io<io::PrefixedIo<I>>>>;
-pub type GatewayIo<I> = io::EitherIo<FwdIo<I>, SensorIo<tls::server::Io<io::PrefixedIo<I>>>>;
+type FwdIo<I> = io::PrefixedIo<SensorIo<tls::server::TransparentIo<I>>>;
+pub type GatewayIo<I> = io::EitherIo<FwdIo<I>, SensorIo<tls::server::TransparentIo<I>>>;
 
 impl<T> Inbound<T> {
     /// Builds a stack that handles connections that target the proxy's inbound port
@@ -150,15 +150,16 @@ impl<T> Inbound<T> {
                 // with transport header support.
                 svc::stack(gateway)
                     .push_on_response(svc::MapTargetLayer::new(io::EitherIo::Right))
-                    .check_new_service::<GatewayConnection, SensorIo<tls::server::Io<io::PrefixedIo<I>>>>()
+                    .check_new_service::<GatewayConnection, SensorIo<tls::server::TransparentIo<I>>>()
                     .instrument(|_: &GatewayConnection| debug_span!("legacy"))
                     .into_inner(),
             )
-            .check_new_service::<ClientInfo, SensorIo<tls::server::Io<io::PrefixedIo<I>>>>()
+            .check_new_service::<ClientInfo, SensorIo<tls::server::TransparentIo<I>>>()
             .push(rt.metrics.transport.layer_accept())
             .instrument(|_: &ClientInfo| debug_span!("direct"))
             // Build a ClientInfo target for each accepted connection. Refuse the
             // connection if it doesn't include an mTLS identity.
+            .check_new_service::<ClientInfo, tls::server::TransparentIo<I>>()
             .push_request_filter(ClientInfo::try_from)
             .push(tls::NewTransparentTls::layer(
                 rt.identity.clone().map(WithTransportHeaderAlpn),

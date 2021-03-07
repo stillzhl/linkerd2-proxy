@@ -32,8 +32,9 @@ pub struct Logical<P> {
 
 #[derive(Clone, Debug)]
 pub struct Concrete<P> {
-    pub resolve: ConcreteAddr,
-    pub logical: Logical<P>,
+    pub addr: ConcreteAddr,
+    pub logical_addr: profiles::LogicalAddr,
+    pub protocol: P,
 }
 
 #[derive(Clone, Debug)]
@@ -161,15 +162,9 @@ impl<P> Logical<P> {
 
 // === impl Concrete ===
 
-impl<P> From<(ConcreteAddr, Logical<P>)> for Concrete<P> {
-    fn from((resolve, logical): (ConcreteAddr, Logical<P>)) -> Self {
-        Self { resolve, logical }
-    }
-}
-
 impl<P> Param<ConcreteAddr> for Concrete<P> {
     fn param(&self) -> ConcreteAddr {
-        self.resolve.clone()
+        self.addr.clone()
     }
 }
 

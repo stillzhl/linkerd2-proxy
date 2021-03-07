@@ -3,9 +3,18 @@ use crate::{resolve, Outbound};
 use linkerd_app_core::{
     config, drain, io, profiles,
     proxy::{api_resolve::ConcreteAddr, core::Resolve, tcp},
-    svc, tls, Conditional, Error,
+    svc, tls,
+    transport::OrigDstAddr,
+    Conditional, Error, Never,
 };
 use tracing::{debug, debug_span};
+
+#[derive(Clone, Debug)]
+pub struct Profile {
+    profile: profiles::Receiver,
+    addr: profiles::LogicalAddr,
+    orig_dst: OrigDstAddr,
+}
 
 impl<C> Outbound<C>
 where
@@ -82,17 +91,7 @@ where
             )
             .into_new_service()
             .push_map_target(Concrete::from)
-            // If there's no resolveable address, bypass the load balancer.
-            .push(svc::UnwrapOr::layer(
-                endpoint
-                    .clone()
-                    .push_map_target(|logical: Logical| {
-                        debug!("No profile resolved");
-                        Endpoint::from((tls::NoClientTls::NotProvidedByServiceDiscovery, logical))
-                    })
-                    .into_inner(),
-            ))
-            .check_new_service::<(Option<ConcreteAddr>, Logical), I>()
+            .check_new_service::<(ConcreteAddr, Logical), I>()
             .push(profiles::split::layer())
             .push_on_response(
                 svc::layers()
@@ -108,7 +107,22 @@ where
             .push_cache(cache_max_idle_age)
             .check_new_service::<Logical, I>()
             .push_switch(
-                Logical::or_endpoint(tls::NoClientTls::NotProvidedByServiceDiscovery),
+                |logical: Logical| {
+                    if let Some(profile) = logical.profile {
+                        if let Some(addr) = profile.borrow().logical.clone() {
+                            return Ok::<_, Never>(svc::Either::A(Profile {
+                                addr,
+                                profile,
+                                orig_dst: logical.orig_dst,
+                            }));
+                        }
+                    };
+
+                    Ok(svc::Either::B(Endpoint::from((
+                        tls::NoClientTls::NotProvidedByServiceDiscovery,
+                        logical,
+                    ))))
+                },
                 endpoint.into_inner(),
             )
             .instrument(|_: &Logical| debug_span!("tcp"))

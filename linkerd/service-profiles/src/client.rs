@@ -1,4 +1,4 @@
-use crate::{http, LogicalAddr, Profile, Receiver, Target};
+use crate::{http, LogicalAddr, LookupAddr, Profile, Receiver, Target};
 use api::destination_client::DestinationClient;
 use futures::{future, prelude::*, ready, select_biased};
 use http_body::Body as HttpBody;
@@ -57,6 +57,7 @@ where
     #[pin]
     state: State<R::Backoff>,
     request: api::GetDestination,
+    port: u16,
 }
 
 #[pin_project(project = StateProj)]
@@ -111,7 +112,7 @@ where
 
 impl<T, S, R> tower::Service<T> for Client<S, R>
 where
-    T: Param<LogicalAddr>,
+    T: Param<LookupAddr>,
     S: GrpcService<BoxBody> + Clone + Send + 'static,
     S::ResponseBody: Send,
     <S::ResponseBody as Body>::Data: Send,
@@ -131,7 +132,7 @@ where
     }
 
     fn call(&mut self, t: T) -> Self::Future {
-        let LogicalAddr(addr) = t.param();
+        let LookupAddr(addr) = t.param();
         let request = api::GetDestination {
             path: addr.to_string(),
             context_token: self.context_token.clone(),
@@ -139,6 +140,7 @@ where
         };
 
         let inner = Inner {
+            port: addr.port(),
             request,
             service: self.service.clone(),
             recover: self.recover.clone(),
@@ -230,6 +232,7 @@ where
     fn poll_rx(
         rx: Pin<&mut grpc::Streaming<api::DestinationProfile>>,
         cx: &mut Context<'_>,
+        port: u16,
     ) -> Poll<Option<Result<Profile, grpc::Status>>> {
         trace!("poll");
         let profile = ready!(rx.poll_next(cx)).map(|res| {
@@ -252,7 +255,7 @@ where
                     resolve::to_addr_meta(e, &labels)
                 });
                 Profile {
-                    name,
+                    logical: name.map(|n| LogicalAddr((n, port).into())),
                     http_routes,
                     targets,
                     opaque_protocol: proto.opaque_protocol,
@@ -271,6 +274,7 @@ where
         let _enter = span.enter();
 
         loop {
+            let port = self.port;
             let mut this = self.as_mut().project();
             match this.state.as_mut().project() {
                 StateProj::Disconnected { backoff } => {
@@ -297,7 +301,7 @@ where
                 }
                 StateProj::Streaming(s) => {
                     trace!("streaming");
-                    let status = match ready!(Self::poll_rx(s, cx)) {
+                    let status = match ready!(Self::poll_rx(s, cx, port)) {
                         Some(Ok(profile)) => return Poll::Ready(Ok(profile)),
                         None => grpc::Status::new(grpc::Code::Ok, ""),
                         Some(Err(status)) => status,

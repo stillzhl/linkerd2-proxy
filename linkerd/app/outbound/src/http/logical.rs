@@ -1,11 +1,30 @@
 use super::{Concrete, Logical};
 use crate::{resolve, stack_labels, Outbound};
 use linkerd_app_core::{
-    classify, config, profiles,
-    proxy::{core::Resolve, http},
+    classify, config, dst, profiles,
+    proxy::{api_resolve::ConcreteAddr, core::Resolve, http},
     retry, svc, tls, Error, Never, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER,
 };
 use tracing::debug_span;
+
+#[derive(Clone, Debug)]
+struct Profile {
+    addr: profiles::LogicalAddr,
+    profile: profiles::Receiver,
+    version: http::Version,
+}
+
+impl svc::Param<profiles::LogicalAddr> for Profile {
+    fn param(&self) -> profiles::LogicalAddr {
+        self.addr.clone()
+    }
+}
+
+impl svc::Param<profiles::Receiver> for Profile {
+    fn param(&self) -> profiles::Receiver {
+        self.profile.clone()
+    }
+}
 
 impl<E> Outbound<E> {
     pub fn push_http_logical<B, ESvc, R>(
@@ -89,25 +108,12 @@ impl<E> Outbound<E> {
             // The concrete address is only set when the profile could be
             // resolved. Endpoint resolution is skipped when there is no
             // concrete address.
-            .instrument(|c: &Concrete| debug_span!("concrete", addr = %c.resolve))
-            .push_map_target(Concrete::from)
-            // If there's no resolveable address, bypass the load balancer.
-            .push(svc::UnwrapOr::layer(
-                endpoint
-                    .clone()
-                    .push_on_response(
-                        svc::layers()
-                            .push(http::BoxRequest::layer())
-                            .push(http::BoxResponse::layer()),
-                    )
-                    .push_map_target(|logical: Logical| {
-                        R::Endpoint::from((
-                            tls::NoClientTls::NotProvidedByServiceDiscovery,
-                            logical,
-                        ))
-                    })
-                    .into_inner(),
-            ))
+            .push_map_target(|(addr, p): (ConcreteAddr, Profile)| Concrete {
+                addr,
+                logical_addr: p.addr,
+                protocol: p.version,
+            })
+            .instrument(|(addr, t): &(ConcreteAddr, _)| debug_span!("concrete", %addr))
             // Distribute requests over a distribution of balancers via a
             // traffic split.
             //
@@ -115,6 +121,7 @@ impl<E> Outbound<E> {
             // When the split is in failfast, spawn the service in a background
             // task so it becomes ready without new requests.
             .push(profiles::split::layer())
+            .check_new_service::<Profile, http::Request<_>>()
             .push_on_response(
                 svc::layers()
                     .push(svc::layer::mk(svc::SpawnReady::new))
@@ -122,7 +129,6 @@ impl<E> Outbound<E> {
                     .push(svc::FailFast::layer("HTTP Logical", dispatch_timeout))
                     .push_spawn_buffer(buffer_capacity),
             )
-            .push_cache(cache_max_idle_age)
             // Note: routes can't exert backpressure.
             .push(profiles::http::route_request::layer(
                 svc::proxies()
@@ -140,37 +146,39 @@ impl<E> Outbound<E> {
                     // Sets the per-route response classifier as a request
                     // extension.
                     .push(classify::NewClassify::layer())
-                    .push_map_target(Logical::mk_route)
+                    .push_map_target(|(route, profile): (profiles::http::Route, Profile)| {
+                        dst::Route::outbound(route, profile.addr)
+                    })
                     .into_inner(),
             ))
-            // Strips headers that may be set by this proxy and add an outbound
-            // canonical-dst-header. The response body is boxed unify the profile
-            // stack's response type. withthat of to endpoint stack.
-            .push(http::NewHeaderFromTarget::layer(CANONICAL_DST_HEADER))
+            .check_new_service::<Profile, http::Request<_>>()
+            // // Strips headers that may be set by this proxy and add an outbound
+            // // canonical-dst-header. The response body is boxed unify the profile
+            // // stack's response type. withthat of to endpoint stack.
+            // .push(http::NewHeaderFromTarget::layer(CANONICAL_DST_HEADER))
             .push_on_response(
                 svc::layers()
                     .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))
                     .push(http::BoxResponse::layer()),
             )
-            .instrument(|l: &Logical| debug_span!("logical", dst = %l.addr()))
+            .instrument(|p: &Profile| debug_span!("logical", dst = %p.addr))
             .push_switch(
                 |logical: Logical| {
-                    let should_resolve = match logical.profile.as_ref() {
-                        Some(p) => {
-                            let p = p.borrow();
-                            p.endpoint.is_none() && (p.name.is_some() || !p.targets.is_empty())
+                    if let Some(profile) = logical.profile.clone() {
+                        let addr = profile.borrow().logical.clone();
+                        if let Some(addr) = addr {
+                            return Ok::<_, Never>(svc::Either::A(Profile {
+                                addr,
+                                profile,
+                                version: logical.protocol,
+                            }));
                         }
-                        None => false,
                     };
 
-                    if should_resolve {
-                        Ok::<_, Never>(svc::Either::A(logical))
-                    } else {
-                        Ok(svc::Either::B(R::Endpoint::from((
-                            tls::NoClientTls::NotProvidedByServiceDiscovery,
-                            logical,
-                        ))))
-                    }
+                    Ok(svc::Either::B(R::Endpoint::from((
+                        tls::NoClientTls::NotProvidedByServiceDiscovery,
+                        logical,
+                    ))))
                 },
                 svc::stack(endpoint)
                     .push_on_response(http::BoxRequest::layer())

@@ -1,7 +1,7 @@
 #![deny(warnings, rust_2018_idioms)]
 
 use futures::stream::Stream;
-use linkerd_addr::Addr;
+use linkerd_addr::{Addr, NameAddr};
 pub use linkerd_dns_name::Name;
 use linkerd_error::Error;
 use linkerd_proxy_api_resolve::Metadata;
@@ -25,7 +25,7 @@ pub type Receiver = tokio::sync::watch::Receiver<Profile>;
 
 #[derive(Clone, Debug, Default)]
 pub struct Profile {
-    pub name: Option<Name>,
+    pub logical: Option<LogicalAddr>,
     pub http_routes: Vec<(self::http::RequestMatch, self::http::Route)>,
     pub targets: Vec<Target>,
     pub opaque_protocol: bool,
@@ -33,8 +33,12 @@ pub struct Profile {
 }
 
 /// A profile lookup target.
-#[derive(Clone, Debug)]
-pub struct LogicalAddr(pub Addr);
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct LookupAddr(pub Addr);
+
+/// A resolved logical service address.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct LogicalAddr(pub NameAddr);
 
 #[derive(Clone, Debug)]
 pub struct Target {
@@ -104,4 +108,20 @@ fn stream_profile(mut rx: Receiver) -> Pin<Box<dyn Stream<Item = Profile> + Send
             }
         }
     })
+}
+
+// === impl LookupAddr ===
+
+impl std::fmt::Display for LookupAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+// === impl Logical ===
+
+impl std::fmt::Display for LogicalAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }

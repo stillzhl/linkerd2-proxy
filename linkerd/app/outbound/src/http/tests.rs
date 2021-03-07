@@ -12,11 +12,12 @@ use bytes::Bytes;
 use hyper::{client::conn::Builder as ClientBuilder, Body, Request, Response};
 use linkerd_app_core::{
     io,
+    profiles::LogicalAddr,
     proxy::resolve::map_endpoint,
     svc::{self, NewService},
     tls,
     transport::{listen, ClientAddr, Local, OrigDstAddr, Remote, ServerAddr},
-    Error, ProxyRuntime,
+    Error, NameAddr, ProxyRuntime,
 };
 use std::{
     net::SocketAddr,
@@ -242,7 +243,7 @@ async fn meshed_hello_world() {
     let profiles = profile::resolver().profile(
         ep1,
         profile::Profile {
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((svc_name.clone(), ep1.port())))),
             ..Default::default()
         },
     );
@@ -295,7 +296,7 @@ async fn stacks_idle_out() {
         ep1,
         profile::Profile {
             opaque_protocol: false,
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((svc_name.clone(), ep1.port())))),
             ..Default::default()
         },
     );
@@ -365,7 +366,7 @@ async fn active_stacks_dont_idle_out() {
         ep1,
         profile::Profile {
             opaque_protocol: false,
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((svc_name.clone(), ep1.port())))),
             ..Default::default()
         },
     );

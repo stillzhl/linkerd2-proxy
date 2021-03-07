@@ -12,12 +12,13 @@ use crate::{
 };
 use linkerd_app_core::{
     io,
+    profiles::LogicalAddr,
     proxy::resolve::map_endpoint,
     svc,
     svc::NewService,
     tls,
     transport::{listen, ClientAddr, Local, OrigDstAddr, Remote, ServerAddr},
-    Addr, Conditional, Error, IpMatch,
+    Addr, Conditional, Error, IpMatch, NameAddr,
 };
 use std::{
     future::Future,
@@ -201,7 +202,7 @@ async fn resolutions_are_reused() {
     let profiles = support::profiles().profile(
         addr,
         profile::Profile {
-            name: Some(svc_name),
+            logical: Some(LogicalAddr(NameAddr::from((svc_name, addr.port())))),
             ..profile::Profile::default()
         },
     );
@@ -278,7 +279,10 @@ async fn load_balances() {
     let profiles = support::profile::resolver().profile(
         svc_addr,
         profile::Profile {
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((
+                svc_name.clone(),
+                svc_addr.port(),
+            )))),
             ..Default::default()
         },
     );
@@ -373,7 +377,10 @@ async fn load_balancer_add_endpoints() {
     let profiles = support::profile::resolver().profile(
         svc_addr,
         profile::Profile {
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((
+                svc_name.clone(),
+                svc_addr.port(),
+            )))),
             ..Default::default()
         },
     );
@@ -487,7 +494,10 @@ async fn load_balancer_remove_endpoints() {
     let profiles = support::profile::resolver().profile(
         svc_addr,
         profile::Profile {
-            name: Some(svc_name.clone()),
+            logical: Some(LogicalAddr(NameAddr::from((
+                svc_name.clone(),
+                svc_addr.port(),
+            )))),
             ..Default::default()
         },
     );
@@ -609,7 +619,7 @@ async fn no_profiles_when_outside_search_nets() {
     let profiles = support::profiles().profile(
         profile_addr,
         profile::Profile {
-            name: Some(svc_name),
+            logical: Some(LogicalAddr(NameAddr::from((svc_name, profile_addr.port())))),
             ..Default::default()
         },
     );

@@ -15,9 +15,17 @@ pub struct Route {
 impl Route {
     pub fn outbound(route: profiles::http::Route, addr: profiles::LogicalAddr) -> Self {
         Self {
-            addr,
             route,
+            addr,
             direction: metrics::Direction::Out,
+        }
+    }
+
+    pub fn inbound(route: profiles::http::Route, addr: profiles::LogicalAddr) -> Self {
+        Self {
+            route,
+            addr,
+            direction: metrics::Direction::In,
         }
     }
 }

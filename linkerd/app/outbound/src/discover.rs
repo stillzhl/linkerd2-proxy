@@ -1,7 +1,7 @@
 use crate::{tcp, Outbound};
 use linkerd_app_core::{
     discovery_rejected, io, profiles, svc,
-    transport::{listen, metrics::SensorIo},
+    transport::{listen, metrics::SensorIo, OrigDstAddr},
     Error, IpMatch,
 };
 use std::convert::TryFrom;
@@ -24,7 +24,7 @@ impl<N> Outbound<N> {
         N: svc::NewService<tcp::Logical, Service = NSvc> + Clone + Send + 'static,
         NSvc: svc::Service<SensorIo<I>, Response = (), Error = Error> + Send + 'static,
         NSvc::Future: Send,
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + 'static,
         P::Future: Send,
         P::Error: Send,
     {
@@ -76,11 +76,12 @@ struct AllowProfile(pub IpMatch);
 // === impl AllowProfile ===
 
 impl svc::stack::Predicate<tcp::Accept> for AllowProfile {
-    type Request = profiles::LogicalAddr;
+    type Request = profiles::LookupAddr;
 
-    fn check(&mut self, a: tcp::Accept) -> Result<profiles::LogicalAddr, Error> {
-        if self.0.matches(a.orig_dst.0.ip()) {
-            Ok(profiles::LogicalAddr(a.orig_dst.0.into()))
+    fn check(&mut self, a: tcp::Accept) -> Result<profiles::LookupAddr, Error> {
+        let OrigDstAddr(addr) = a.orig_dst;
+        if self.0.matches(addr.ip()) {
+            Ok(profiles::LookupAddr(addr.into()))
         } else {
             Err(discovery_rejected().into())
         }

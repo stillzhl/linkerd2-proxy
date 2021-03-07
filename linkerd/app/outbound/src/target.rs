@@ -4,13 +4,12 @@ use linkerd_app_core::{
         api_resolve::{ConcreteAddr, Metadata},
         resolve::map_endpoint::MapEndpoint,
     },
-    svc::{self, Param},
+    svc::Param,
     tls,
     transport::{self, OrigDstAddr, Remote, ServerAddr},
-    transport_header, Addr, Conditional, Error,
+    transport_header, Addr, Conditional,
 };
 use std::net::SocketAddr;
-use tracing::debug;
 
 #[derive(Copy, Clone)]
 pub struct EndpointFromMetadata {
@@ -85,19 +84,16 @@ impl<P> Param<Option<profiles::Receiver>> for Logical<P> {
     }
 }
 
-/// Used for default traffic split
-impl<P> Param<profiles::LogicalAddr> for Logical<P> {
-    fn param(&self) -> profiles::LogicalAddr {
-        profiles::LogicalAddr(self.addr())
-    }
-}
-
 impl<P> Logical<P> {
     pub fn addr(&self) -> Addr {
         self.profile
             .as_ref()
-            .and_then(|p| p.borrow().name.clone())
-            .map(|n| Addr::from((n, self.orig_dst.0.port())))
+            .and_then(|p| {
+                p.borrow()
+                    .logical
+                    .clone()
+                    .map(|profiles::LogicalAddr(a)| Addr::from(a))
+            })
             .unwrap_or_else(|| self.orig_dst.0.into())
     }
 }
@@ -134,29 +130,6 @@ impl<P: std::fmt::Debug> std::fmt::Debug for Logical<P> {
                 ),
             )
             .finish()
-    }
-}
-
-impl<P> Logical<P> {
-    pub fn or_endpoint(
-        reason: tls::NoClientTls,
-    ) -> impl Fn(Self) -> Result<svc::Either<Self, Endpoint<P>>, Error> + Copy {
-        move |logical: Self| {
-            let should_resolve = match logical.profile.as_ref() {
-                Some(p) => {
-                    let p = p.borrow();
-                    p.endpoint.is_none() && (p.name.is_some() || !p.targets.is_empty())
-                }
-                None => false,
-            };
-
-            if should_resolve {
-                Ok(svc::Either::A(logical))
-            } else {
-                debug!(%reason, orig_dst = %logical.orig_dst, "Target is unresolveable");
-                Ok(svc::Either::B(Endpoint::from((reason, logical))))
-            }
-        }
     }
 }
 
@@ -303,8 +276,8 @@ impl<P: Copy + std::fmt::Debug> MapEndpoint<Concrete<P>, Metadata> for EndpointF
             addr: Remote(ServerAddr(addr)),
             tls,
             metadata,
-            logical_addr: concrete.logical.addr(),
-            protocol: concrete.logical.protocol,
+            logical_addr: concrete.logical_addr.0.clone().into(),
+            protocol: concrete.protocol,
         }
     }
 }

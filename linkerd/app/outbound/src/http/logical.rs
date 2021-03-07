@@ -1,9 +1,9 @@
-use super::{Concrete, Logical};
+use super::{CanonicalDstHeader, Concrete, Logical};
 use crate::{resolve, stack_labels, Outbound};
 use linkerd_app_core::{
     classify, config, dst, profiles,
     proxy::{api_resolve::ConcreteAddr, core::Resolve, http},
-    retry, svc, tls, Error, Never, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER,
+    retry, svc, tls, Error, Never, DST_OVERRIDE_HEADER,
 };
 use tracing::debug_span;
 
@@ -23,6 +23,12 @@ impl svc::Param<profiles::LogicalAddr> for Profile {
 impl svc::Param<profiles::Receiver> for Profile {
     fn param(&self) -> profiles::Receiver {
         self.profile.clone()
+    }
+}
+
+impl svc::Param<CanonicalDstHeader> for Profile {
+    fn param(&self) -> CanonicalDstHeader {
+        CanonicalDstHeader(self.addr.clone())
     }
 }
 
@@ -113,7 +119,7 @@ impl<E> Outbound<E> {
                 logical_addr: p.addr,
                 protocol: p.version,
             })
-            .instrument(|(addr, t): &(ConcreteAddr, _)| debug_span!("concrete", %addr))
+            .instrument(|(addr, _): &(ConcreteAddr, _)| debug_span!("concrete", %addr))
             // Distribute requests over a distribution of balancers via a
             // traffic split.
             //
@@ -151,11 +157,10 @@ impl<E> Outbound<E> {
                     })
                     .into_inner(),
             ))
-            .check_new_service::<Profile, http::Request<_>>()
-            // // Strips headers that may be set by this proxy and add an outbound
-            // // canonical-dst-header. The response body is boxed unify the profile
-            // // stack's response type. withthat of to endpoint stack.
-            // .push(http::NewHeaderFromTarget::layer(CANONICAL_DST_HEADER))
+            // Strips headers that may be set by this proxy and add an outbound
+            // canonical-dst-header. The response body is boxed unify the profile
+            // stack's response type. withthat of to endpoint stack.
+            .push(http::NewHeaderFromTarget::<CanonicalDstHeader, _>::layer())
             .push_on_response(
                 svc::layers()
                     .push(http::strip_header::request::layer(DST_OVERRIDE_HEADER))

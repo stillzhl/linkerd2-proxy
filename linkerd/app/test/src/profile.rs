@@ -1,4 +1,4 @@
-pub use linkerd_app_core::{dns, profiles::*};
+pub use linkerd_app_core::{dns, profiles::*, NameAddr};
 pub use tokio::sync::watch;
 pub use watch::channel;
 
@@ -28,9 +28,9 @@ pub fn only_with_name(name: &str) -> Receiver {
 
 pub fn with_name(name: &str) -> Profile {
     use std::str::FromStr;
-    let name = dns::Name::from_str(name).expect("non-ascii characters in DNS name! 😢");
+    let addr = NameAddr::from_str(name).expect("non-ascii characters in DNS name! 😢");
     Profile {
-        name: Some(name),
+        logical: Some(LogicalAddr(addr)),
         ..Default::default()
     }
 }

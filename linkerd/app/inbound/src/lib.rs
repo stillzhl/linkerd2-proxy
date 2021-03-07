@@ -14,7 +14,7 @@ pub mod target;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-pub use self::target::{HttpEndpoint, Logical, RequestTarget, Target, TcpEndpoint};
+pub use self::target::{HttpEndpoint, RequestTarget, Target, TcpEndpoint};
 use self::{
     prevent_loop::PreventLoop,
     require_identity::RequireIdentityForPorts,
@@ -135,7 +135,7 @@ impl Inbound<()> {
             + 'static,
         GSvc::Error: Into<Error>,
         GSvc::Future: Send,
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + Sync + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + Sync + 'static,
         P::Error: Send,
         P::Future: Send,
     {
@@ -227,7 +227,7 @@ where
         GSvc: svc::Service<direct::GatewayIo<I>, Response = ()> + Send + 'static,
         GSvc::Error: Into<Error>,
         GSvc::Future: Send,
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + Sync + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + Sync + 'static,
         P::Error: Send,
         P::Future: Send,
     {

@@ -116,7 +116,7 @@ impl<S> Outbound<S> {
         <R as Resolve<tcp::Concrete>>::Resolution: Send,
         <R as Resolve<tcp::Concrete>>::Future: Send + Unpin,
         R: Clone + Send + 'static,
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + 'static,
         P::Future: Send,
         P::Error: Send,
         I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + std::fmt::Debug + Send + Unpin + 'static,
@@ -155,7 +155,7 @@ impl Outbound<()> {
         <R as Resolve<tcp::Concrete>>::Resolution: Send,
         <R as Resolve<tcp::Concrete>>::Future: Send + Unpin,
         R: Clone + Send + Sync + Unpin + 'static,
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + Sync + Unpin + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + Sync + Unpin + 'static,
         P::Future: Send,
         P::Error: Send,
     {

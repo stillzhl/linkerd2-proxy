@@ -1,6 +1,6 @@
 use crate::{
     allow_discovery::AllowProfile,
-    target::{self, HttpAccept, HttpEndpoint, Logical, RequestTarget, Target, TcpEndpoint},
+    target::{HttpAccept, HttpEndpoint, RequestTarget, Target, TcpEndpoint},
     Inbound,
 };
 pub use linkerd_app_core::proxy::http::{
@@ -14,12 +14,25 @@ use linkerd_app_core::{
     proxy::{http, tap},
     reconnect,
     svc::{self, Param},
-    Error, DST_OVERRIDE_HEADER,
+    Error, Never, DST_OVERRIDE_HEADER,
 };
 use tracing::debug_span;
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Clone, Debug)]
+struct Profile {
+    addr: profiles::LogicalAddr,
+    profile: profiles::Receiver,
+    target: Target,
+}
+
+impl Param<profiles::Receiver> for Profile {
+    fn param(&self) -> profiles::Receiver {
+        self.profile.clone()
+    }
+}
 
 impl<H> Inbound<H> {
     pub fn push_http_server<T, I, HSvc>(
@@ -115,7 +128,7 @@ where
             > + Clone,
     >
     where
-        P: profiles::GetProfile<profiles::LogicalAddr> + Clone + Send + Sync + 'static,
+        P: profiles::GetProfile<profiles::LookupAddr> + Clone + Send + Sync + 'static,
         P::Future: Send,
         P::Error: Send,
     {
@@ -145,8 +158,11 @@ where
             .push(tap::NewTapHttp::layer(rt.tap.clone()))
             // Records metrics for each `Target`.
             .push(rt.metrics.http_endpoint.to_layer::<classify::Response, _>())
-            .push_on_response(http_tracing::client(rt.span_sink.clone(), trace_labels()))
-            .push_on_response(http::BoxResponse::layer())
+            .push_on_response(
+                svc::layers()
+                    .push(http_tracing::client(rt.span_sink.clone(), trace_labels()))
+                    .push(http::BoxResponse::layer()),
+            )
             .check_new_service::<Target, http::Request<_>>();
 
         // Attempts to discover a service profile for each logical target (as
@@ -157,7 +173,7 @@ where
             .check_new_service::<Target, http::Request<http::BoxBody>>()
             .push_on_response(http::BoxRequest::layer())
             // The target stack doesn't use the profile resolution, so drop it.
-            .push_map_target(Target::from)
+            .push_map_target(|p: Profile| p.target)
             .push(profiles::http::route_request::layer(
                 svc::proxies()
                     // Sets the route as a request extension so that it can be used
@@ -169,20 +185,45 @@ where
                     // extension.
                     .push(classify::NewClassify::layer())
                     .check_new_clone::<dst::Route>()
-                    .push_map_target(target::route)
+                    .push_map_target(|(r, p): (profiles::http::Route, Profile)| {
+                        dst::Route::inbound(r, p.addr)
+                    })
                     .into_inner(),
             ))
-            .push_map_target(Logical::from)
+            .push_on_response(http::BoxResponse::layer())
+            .check_new_service::<Profile, http::Request<_>>()
+            .push_switch(
+                |(p, target): (Option<profiles::Receiver>, Target)| {
+                    if let Some(profile) = p {
+                        let addr = profile.borrow().logical.clone();
+                        if let Some(addr) = addr {
+                            return Ok::<_, Never>(svc::Either::A(Profile {
+                                addr,
+                                profile,
+                                target,
+                            }));
+                        }
+                    };
+
+                    Ok(svc::Either::B(target))
+                },
+                target
+                    .clone()
+                    .push_on_response(http::BoxRequest::layer())
+                    .into_inner(),
+            )
             .push(profiles::discover::layer(
                 profiles,
                 AllowProfile(config.allow_discovery.clone()),
             ))
+            .check_new_service::<Target, http::Request<http::BoxBody>>()
             .instrument(|_: &Target| debug_span!("profile"))
             .push_on_response(
                 svc::layers()
                     .push(http::BoxResponse::layer())
                     .push(svc::layer::mk(svc::SpawnReady::new)),
             )
+            .check_new_service::<Target, http::Request<http::BoxBody>>()
             // Skip the profile stack if it takes too long to become ready.
             .push_when_unready(
                 config.profile_idle_timeout,

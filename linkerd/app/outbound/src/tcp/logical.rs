@@ -7,13 +7,25 @@ use linkerd_app_core::{
     transport::OrigDstAddr,
     Conditional, Error, Never,
 };
-use tracing::{debug, debug_span};
+use tracing::debug_span;
 
 #[derive(Clone, Debug)]
 pub struct Profile {
     profile: profiles::Receiver,
     addr: profiles::LogicalAddr,
     orig_dst: OrigDstAddr,
+}
+
+impl svc::Param<profiles::LogicalAddr> for Profile {
+    fn param(&self) -> profiles::LogicalAddr {
+        self.addr.clone()
+    }
+}
+
+impl svc::Param<profiles::Receiver> for Profile {
+    fn param(&self) -> profiles::Receiver {
+        self.profile.clone()
+    }
 }
 
 impl<C> Outbound<C>
@@ -47,7 +59,6 @@ where
 
         let config::ProxyConfig {
             buffer_capacity,
-            cache_max_idle_age,
             dispatch_timeout,
             ..
         } = config.proxy;
@@ -90,8 +101,12 @@ where
                     .push(drain::Retain::layer(rt.drain.clone())),
             )
             .into_new_service()
-            .push_map_target(Concrete::from)
-            .check_new_service::<(ConcreteAddr, Logical), I>()
+            .check_new_service::<Concrete, I>()
+            .push_map_target(|(addr, p): (ConcreteAddr, Profile)| Concrete {
+                addr,
+                logical_addr: p.addr,
+                protocol: (),
+            })
             .push(profiles::split::layer())
             .push_on_response(
                 svc::layers()
@@ -104,12 +119,12 @@ where
                     .push(svc::FailFast::layer("TCP Logical", dispatch_timeout))
                     .push_spawn_buffer(buffer_capacity),
             )
-            .push_cache(cache_max_idle_age)
-            .check_new_service::<Logical, I>()
+            .check_new_service::<Profile, I>()
             .push_switch(
                 |logical: Logical| {
-                    if let Some(profile) = logical.profile {
-                        if let Some(addr) = profile.borrow().logical.clone() {
+                    if let Some(profile) = logical.profile.clone() {
+                        let addr = profile.borrow().logical.clone();
+                        if let Some(addr) = addr {
                             return Ok::<_, Never>(svc::Either::A(Profile {
                                 addr,
                                 profile,

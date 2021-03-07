@@ -34,12 +34,6 @@ pub struct Target {
     pub tls: tls::ConditionalServerTls,
 }
 
-#[derive(Clone, Debug)]
-pub struct Logical {
-    target: Target,
-    profiles: Option<profiles::Receiver>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HttpEndpoint {
     pub port: u16,
@@ -178,16 +172,6 @@ impl Into<SocketAddr> for TcpEndpoint {
     }
 }
 
-// === impl Profile ===
-
-pub(super) fn route((route, logical): (profiles::http::Route, Logical)) -> dst::Route {
-    dst::Route {
-        route,
-        target: logical.target.dst,
-        direction: metrics::Direction::In,
-    }
-}
-
 // === impl Target ===
 
 impl From<HttpAccept> for Target {
@@ -201,15 +185,9 @@ impl From<HttpAccept> for Target {
     }
 }
 
-impl From<Logical> for Target {
-    fn from(Logical { target, .. }: Logical) -> Self {
-        target
-    }
-}
-
-impl Param<profiles::LogicalAddr> for Target {
-    fn param(&self) -> profiles::LogicalAddr {
-        profiles::LogicalAddr(self.dst.clone())
+impl Param<profiles::LookupAddr> for Target {
+    fn param(&self) -> profiles::LookupAddr {
+        profiles::LookupAddr(self.dst.clone())
     }
 }
 
@@ -338,19 +316,5 @@ impl<A> svc::stack::RecognizeRoute<http::Request<A>> for RequestTarget {
                 .try_into()
                 .expect("HTTP version must be valid"),
         })
-    }
-}
-
-// === impl Logical ===
-
-impl From<(Option<profiles::Receiver>, Target)> for Logical {
-    fn from((profiles, target): (Option<profiles::Receiver>, Target)) -> Self {
-        Self { profiles, target }
-    }
-}
-
-impl Param<Option<profiles::Receiver>> for Logical {
-    fn param(&self) -> Option<profiles::Receiver> {
-        self.profiles.clone()
     }
 }

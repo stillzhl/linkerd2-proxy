@@ -1,7 +1,7 @@
 use crate::{LogicalAddr, Profile, Receiver, Target};
 use futures::{prelude::*, ready};
 use indexmap::IndexSet;
-use linkerd_addr::Addr;
+use linkerd_addr::NameAddr;
 use linkerd_error::Error;
 use linkerd_proxy_api_resolve::ConcreteAddr;
 use linkerd_stack::{layer, NewService, Param};
@@ -36,8 +36,8 @@ pub struct Split<T, N, S, Req> {
     target: T,
     new_service: N,
     distribution: WeightedIndex<u32>,
-    addrs: IndexSet<Addr>,
-    services: ReadyCache<Addr, S, Req>,
+    addrs: IndexSet<NameAddr>,
+    services: ReadyCache<NameAddr, S, Req>,
 }
 
 // === impl NewSplit ===
@@ -71,10 +71,7 @@ where
         let mut targets = rx.borrow().targets.clone();
         if targets.is_empty() {
             let LogicalAddr(addr) = target.param();
-            targets.push(Target {
-                addr: addr.into(),
-                weight: 1,
-            })
+            targets.push(Target { addr, weight: 1 })
         }
         trace!(?targets, "Building split service");
 
@@ -128,10 +125,7 @@ where
         if let Some(Profile { mut targets, .. }) = update {
             if targets.is_empty() {
                 let LogicalAddr(addr) = self.target.param();
-                targets.push(Target {
-                    addr: addr.into(),
-                    weight: 1,
-                })
+                targets.push(Target { addr, weight: 1 })
             }
             debug!(?targets, "Updating");
 

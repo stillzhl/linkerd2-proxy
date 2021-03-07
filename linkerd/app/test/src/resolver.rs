@@ -117,7 +117,7 @@ impl<T: Param<ConcreteAddr>, E> tower::Service<T> for Dst<E> {
             .endpoints
             .lock()
             .unwrap()
-            .remove(&addr)
+            .remove(&Addr::from(addr.clone()))
             .map(|x| {
                 tracing::trace!("found endpoint for target");
                 x

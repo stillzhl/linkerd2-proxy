@@ -72,7 +72,6 @@ impl<E> Outbound<E> {
             dispatch_timeout,
             ..
         } = config.proxy;
-        let watchdog = cache_max_idle_age * 2;
 
         let stack = endpoint
             .clone()
@@ -95,7 +94,7 @@ impl<E> Outbound<E> {
             // If the balancer has been empty/unavailable, eagerly fail requests.
             // When the balancer is in failfast, spawn the service in a background
             // task so it becomes ready without new requests.
-            .push(resolve::layer(resolve, watchdog))
+            .push(resolve::layer(resolve, cache_max_idle_age * 2))
             .push_on_response(
                 svc::layers()
                     .push(http::balance::layer(
@@ -120,12 +119,12 @@ impl<E> Outbound<E> {
                 protocol: p.version,
             })
             .instrument(|(addr, _): &(ConcreteAddr, _)| debug_span!("concrete", %addr))
-            // Distribute requests over a distribution of balancers via a
+            // Distribute requests over a distribution of cached balancers via a
             // traffic split.
             //
-            // If the traffic split is empty/unavailable, eagerly fail requests.
-            // When the split is in failfast, spawn the service in a background
-            // task so it becomes ready without new requests.
+            // If the traffic split is unavailable, eagerly fail requests. When
+            // the split is in failfast, spawn the service in a background task
+            // so it becomes ready without new requests.
             .push(profiles::split::layer())
             .check_new_service::<Profile, http::Request<_>>()
             .push_on_response(

@@ -2263,7 +2263,7 @@ dependencies = [
 [[package]]
 name = "tower"
 version = "0.4.6"
-source = "git+https://github.com/kleimkuhler/tower?branch=kleimkuhler/spawn-ready-drop#27d55d999f470339f52d35436d4f71f2d7eef723"
+source = "git+https://github.com/kleimkuhler/tower?branch=kleimkuhler/spawn-ready-drop#df0c913bad109240d8554c84cd9268af0569d673"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -2288,7 +2288,7 @@ checksum = "343bc9466d3fe6b0f960ef45960509f84480bf4fd96f92901afe7ff3df9d3a62"
 [[package]]
 name = "tower-layer"
 version = "0.3.1"
-source = "git+https://github.com/kleimkuhler/tower?branch=kleimkuhler/spawn-ready-drop#27d55d999f470339f52d35436d4f71f2d7eef723"
+source = "git+https://github.com/kleimkuhler/tower?branch=kleimkuhler/spawn-ready-drop#df0c913bad109240d8554c84cd9268af0569d673"
 
 [[package]]
 name = "tower-service"

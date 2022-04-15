@@ -26,7 +26,7 @@ jobs:
       options: --security-opt seccomp=unconfined # 🤷
     steps:
       - run: apt update && apt install -y cmake clang golang # for boring
-      - uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+      - uses: actions/checkout@dcd71f646680f2efd8db4afa5ad64fdcba30e748
       - name: install cargo-tarpaulin ${{ env.CARGO_TARPAULIN_VERSION }}
         run: |
           cd "${CARGO_HOME}/bin"

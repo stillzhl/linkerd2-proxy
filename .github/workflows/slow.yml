@@ -22,7 +22,7 @@ jobs:
     container:
       image: docker://rust:1.56.1-buster
     steps:
-      - uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+      - uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b
       - run: |
           for toml in $(find . -mindepth 2 \
                                -not -path '*/fuzz/*' \
@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+      - uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b
       - env:
           CARGO_RELEASE: "1"
         run: make build
@@ -53,7 +53,7 @@ jobs:
     container:
       image: docker://rust:1.56.1-buster
     steps:
-      - uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+      - uses: actions/checkout@2541b1294d2704b0964813337f33b291d3f8596b
       - run: |
           cargo test --no-run \
             --package=linkerd-app \

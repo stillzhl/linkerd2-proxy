@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: git co
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
 
       - name: meta
         id: release-tag-meta
@@ -75,7 +75,7 @@ jobs:
       contents: write
     steps:
       - name: git co
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
 
       - name: meta
         id: release-tag-meta
